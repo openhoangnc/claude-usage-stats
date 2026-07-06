@@ -27,11 +27,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)   // no Dock icon / Cmd-Tab entry
+        if anotherInstanceIsAlreadyRunning() {
+            // A copy is already in the menu bar (e.g. Launch-at-Login plus a
+            // manual open). Hand off to it and quit so there's only one icon.
+            NSApp.terminate(nil)
+            return
+        }
         setupStatusItem()
         showKeychainIntroIfNeeded()
         enableLaunchAtLoginOnFirstRun()
         startTimer(interval: baseRefreshInterval)
         refresh()
+    }
+
+    /// True if another copy of this app (same bundle id) is already running.
+    /// When two instances race to launch, the tie is broken deterministically by
+    /// launch date (then pid) so exactly one survivor is kept — this instance
+    /// quits only when a genuine elder exists.
+    private func anotherInstanceIsAlreadyRunning() -> Bool {
+        let me = NSRunningApplication.current
+        let others = NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleId)
+            .filter { $0.processIdentifier != me.processIdentifier && !$0.isTerminated }
+        guard !others.isEmpty else { return false }
+
+        let myDate = me.launchDate ?? Date.distantFuture
+        return others.contains { other in
+            let otherDate = other.launchDate ?? Date.distantPast
+            if otherDate != myDate { return otherDate < myDate }
+            return other.processIdentifier < me.processIdentifier
+        }
     }
 
     /// Turn on "Launch at Login" by default the first time the app ever runs,
