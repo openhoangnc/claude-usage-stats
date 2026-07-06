@@ -27,8 +27,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)   // no Dock icon / Cmd-Tab entry
         setupStatusItem()
         showKeychainIntroIfNeeded()
+        enableLaunchAtLoginOnFirstRun()
         startTimer()
         refresh()
+    }
+
+    /// Turn on "Launch at Login" by default the first time the app ever runs,
+    /// so a fresh install survives a reboot without the user finding the menu toggle.
+    private func enableLaunchAtLoginOnFirstRun() {
+        let key = "didEnableLaunchAtLoginOnFirstRun"
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: key) { return }
+        defaults.set(true, forKey: key)
+        if !isLaunchAtLoginEnabled {
+            setLaunchAtLogin(true)
+        }
     }
 
     /// One-time explainer shown before the first Keychain access, so the system
