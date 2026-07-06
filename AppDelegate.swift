@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private let refreshInterval: TimeInterval = 120   // windows change slowly; be gentle on the endpoint
 
+    private var lastRefreshAt: Date?
+    private let menuRefreshThrottle: TimeInterval = 30   // skip the on-open auto-refresh if we just fetched
+
     private var lastSnapshot: UsageSnapshot?
     private var lastError: UsageError?
 
@@ -86,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var loggedFirstResult = false
 
     @objc private func refresh() {
+        lastRefreshAt = Date()
         client.fetch { [weak self] result in
             guard let self = self else { return }
             switch result {
@@ -123,7 +127,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMenu() {
         applyState()               // show the freshest data we have
-        refresh()                  // and fetch again in the background
+
+        // Fetch again in the background, unless we just refreshed — avoids
+        // hammering the endpoint when the menu is opened repeatedly.
+        if let last = lastRefreshAt, Date().timeIntervalSince(last) < menuRefreshThrottle {
+            // recent enough; keep the current numbers
+        } else {
+            refresh()
+        }
 
         let menu = NSMenu()
 
