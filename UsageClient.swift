@@ -24,6 +24,7 @@ struct UsageSnapshot {
 enum UsageError: Error {
     case noCredentials
     case tokenExpired
+    case rateLimited(retryAfterSeconds: Int?)
     case http(Int)
     case badResponse
     case network(String)
@@ -32,6 +33,12 @@ enum UsageError: Error {
         switch self {
         case .noCredentials: return "Not signed in — open Claude Code"
         case .tokenExpired:  return "Auth expired — open Claude Code"
+        case .rateLimited(let retry):
+            if let r = retry, r > 0 {
+                let mins = max(1, (r + 59) / 60)
+                return "Rate limited — retrying in \(mins)m"
+            }
+            return "Rate limited — will retry"
         case .http(let c):   return c == 429 ? "Rate limited — will retry" : "Server error (HTTP \(c))"
         case .badResponse:   return "Unexpected response"
         case .network(let m): return m
@@ -55,6 +62,9 @@ final class UsageClient {
                 return self.finish(.failure(.noCredentials), completion)
             }
 
+            ClaudeVersionProvider.shared.refreshIfNeeded()
+            let version = ClaudeVersionProvider.shared.currentVersion
+
             var req = URLRequest(url: self.endpoint)
             req.httpMethod = "GET"
             req.timeoutInterval = 15
@@ -62,6 +72,7 @@ final class UsageClient {
             req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("claude-code/\(version)", forHTTPHeaderField: "User-Agent")
 
             URLSession.shared.dataTask(with: req) { data, resp, err in
                 if let err = err {
@@ -73,6 +84,10 @@ final class UsageClient {
                 if http.statusCode == 401 || http.statusCode == 403 {
                     return self.finish(.failure(.tokenExpired), completion)
                 }
+                if http.statusCode == 429 {
+                    let retrySeconds = self.parseRetryAfter(http)
+                    return self.finish(.failure(.rateLimited(retryAfterSeconds: retrySeconds)), completion)
+                }
                 guard http.statusCode == 200, let data = data else {
                     return self.finish(.failure(.http(http.statusCode)), completion)
                 }
@@ -82,6 +97,24 @@ final class UsageClient {
                 self.finish(.success(snapshot), completion)
             }.resume()
         }
+    }
+
+    private func parseRetryAfter(_ http: HTTPURLResponse) -> Int? {
+        guard let headerValue = http.value(forHTTPHeaderField: "Retry-After") ?? http.value(forHTTPHeaderField: "retry-after") else {
+            return nil
+        }
+        let trimmed = headerValue.trimmingCharacters(in: .whitespaces)
+        if let seconds = Int(trimmed) {
+            return seconds
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        if let date = formatter.date(from: trimmed) {
+            let diff = Int(date.timeIntervalSinceNow)
+            return diff > 0 ? diff : nil
+        }
+        return nil
     }
 
     private func finish(_ result: Result<UsageSnapshot, UsageError>,
@@ -237,5 +270,82 @@ enum UsageFormat {
         if s < 60  { return "\(s)s ago" }
         if s < 3600 { return "\(s / 60)m ago" }
         return "\(s / 3600)h ago"
+    }
+}
+
+// MARK: - Version Provider
+
+/// Automatically keeps the `claude-code/<version>` User-Agent header string up to date.
+/// Checks the npm registry (`@anthropic-ai/claude-code/latest`) once every 24 hours
+/// and caches the latest version in `UserDefaults`. Fallbacks to local `claude --version`
+/// or default version.
+final class ClaudeVersionProvider {
+    static let shared = ClaudeVersionProvider()
+
+    private let userDefaultsKey = "cachedClaudeCodeVersion"
+    private let lastCheckKey = "lastClaudeCodeVersionCheckDate"
+    private let defaultVersion = "2.1.201"
+
+    var currentVersion: String {
+        get {
+            UserDefaults.standard.string(forKey: userDefaultsKey) ?? detectLocalVersion() ?? defaultVersion
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: userDefaultsKey)
+        }
+    }
+
+    func refreshIfNeeded() {
+        let lastCheck = UserDefaults.standard.object(forKey: lastCheckKey) as? Date ?? .distantPast
+        let twentyFourHours: TimeInterval = 86400
+
+        guard Date().timeIntervalSince(lastCheck) >= twentyFourHours else { return }
+
+        fetchLatestFromNpm { [weak self] latestVersion in
+            guard let self = self, let version = latestVersion else { return }
+            self.currentVersion = version
+            UserDefaults.standard.set(Date(), forKey: self.lastCheckKey)
+            NSLog("ClaudeUsageStats: Updated latest Claude Code version to \(version)")
+        }
+    }
+
+    private func fetchLatestFromNpm(completion: @escaping (String?) -> Void) {
+        guard let url = URL(string: "https://registry.npmjs.org/@anthropic-ai/claude-code/latest") else {
+            completion(nil)
+            return
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 10
+        URLSession.shared.dataTask(with: req) { data, _, err in
+            guard err == nil, let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let version = json["version"] as? String else {
+                completion(nil)
+                return
+            }
+            completion(version)
+        }.resume()
+    }
+
+    private func detectLocalVersion() -> String? {
+        let task = Process()
+        let pipe = Pipe()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = ["claude", "--version"]
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                let components = str.components(separatedBy: " ")
+                if let ver = components.first, !ver.isEmpty, ver.contains(".") {
+                    return ver
+                }
+            }
+        } catch {}
+        return nil
     }
 }
