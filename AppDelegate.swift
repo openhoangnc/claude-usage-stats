@@ -142,6 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launch.state = isLaunchAtLoginEnabled ? .on : .off
         menu.addItem(launch)
 
+        let github = NSMenuItem(title: "GitHub Repository", action: #selector(openGitHub), keyEquivalent: "")
+        github.target = self
+        menu.addItem(github)
+
         menu.addItem(.separator())
 
         let quit = NSMenuItem(title: "Quit Claude Usage Stats", action: #selector(quit), keyEquivalent: "q")
@@ -154,6 +158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit() { NSApplication.shared.terminate(nil) }
+
+    @objc private func openGitHub() {
+        if let url = URL(string: "https://github.com/openhoangnc/claude-usage-stats") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     // MARK: Launch at Login
 
