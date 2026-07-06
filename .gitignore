@@ -1,0 +1,6 @@
+ClaudeUsageStats.app/
+ClaudeUsageStats_bin
+generate_icon_bin
+AppIcon.iconset/
+*.o
+.DS_Store
