@@ -1,4 +1,4 @@
-<img src="icon.png" alt="Claude Usage Stats icon" width="36" align="left">
+
 
 # Claude Usage Stats
 
