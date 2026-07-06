@@ -10,12 +10,12 @@ final class StatusBarView: NSView {
     /// Called when the preferred width changes so the status item can resize.
     var onResize: ((CGFloat) -> Void)?
 
-    private(set) var preferredWidth: CGFloat = 30
+    private(set) var preferredWidth: CGFloat = 26
 
     private var sessionPct: Int?
     private var weekPct: Int?
 
-    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
+    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .bold)
 
     private static let rightAlign: NSParagraphStyle = {
         let p = NSMutableParagraphStyle()
@@ -52,7 +52,7 @@ final class StatusBarView: NSView {
 
     private func recomputeWidth() {
         let w = max(line(sessionPct).size().width, line(weekPct).size().width)
-        let newWidth = max(22, ceil(w) + 4)
+        let newWidth = max(22, ceil(w))
         if abs(newWidth - preferredWidth) > 0.5 {
             preferredWidth = newWidth
             onResize?(newWidth)

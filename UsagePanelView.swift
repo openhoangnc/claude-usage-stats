@@ -110,9 +110,14 @@ final class UsagePanelView: NSView {
     }
 
     private func footerString() -> String {
-        if let err = errorText { return "⚠ \(err)" }
-        if let at = snapshot?.fetchedAt { return "Updated \(UsageFormat.ago(at))" }
-        return ""
+        // We keep the last good numbers on screen through an error (e.g. a 429),
+        // so still show when they were fetched to make their staleness clear.
+        let updated = snapshot.map { "Updated \(UsageFormat.ago($0.fetchedAt))" }
+        if let err = errorText {
+            if let updated = updated { return "⚠ \(err) · \(updated)" }
+            return "⚠ \(err)"
+        }
+        return updated ?? ""
     }
 
     private func fillColor(for limit: UsageLimit) -> NSColor {

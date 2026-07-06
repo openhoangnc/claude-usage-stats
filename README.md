@@ -1,4 +1,4 @@
-<img src="icon.png" alt="Claude Usage Stats icon" width="88" align="right">
+<img src="icon.png" alt="Claude Usage Stats icon" width="36" align="left">
 
 # Claude Usage Stats
 
@@ -26,9 +26,10 @@ to meet **WCAG AAA** (≥7:1 contrast) against both light and dark menu bars:
 curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main/install.sh | bash
 ```
 
-Builds from source (needs Xcode command-line tools) and installs to
-`/Applications`. Enable **Launch at Login** from the menu (click the indicator →
-Launch at Login).
+Downloads the latest prebuilt release, installs it to `/Applications`, and
+launches it — no Xcode needed. (If no release is available yet, it falls back to
+building from source, which needs the Xcode command-line tools.) Enable **Launch
+at Login** from the menu (click the indicator → Launch at Login).
 
 ## Uninstall
 
