@@ -30,5 +30,3 @@ if [ -d "${APP_PATH}" ]; then
 fi
 
 echo "=== ${APP_NAME} removed. ==="
-echo "Note: the app never wrote to your Keychain. To also revoke its read"
-echo "access, open Keychain Access → 'Claude Code-credentials' → Access Control."

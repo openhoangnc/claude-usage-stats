@@ -53,6 +53,9 @@ final class UsagePanelView: NSView {
 
     private func computedHeight() -> CGFloat {
         guard !limits.isEmpty else {
+            if let err = errorText, err.count > 30 {
+                return padTop + 60 + padBottom
+            }
             return padTop + 20 + padBottom
         }
         var h = padTop
@@ -68,8 +71,8 @@ final class UsagePanelView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard !limits.isEmpty else {
-            drawText(errorText ?? "Loading usage…", at: NSPoint(x: padX, y: padTop),
-                     font: titleFont, color: .secondaryLabelColor)
+            let errorRect = NSRect(x: padX, y: padTop, width: Self.width - padX * 2, height: frame.height - padTop - padBottom)
+            drawTextWrapped(errorText ?? "Loading usage…", in: errorRect, font: titleFont, color: .secondaryLabelColor)
             return
         }
 
@@ -129,6 +132,16 @@ final class UsagePanelView: NSView {
     private func drawText(_ string: String, at point: NSPoint, font: NSFont, color: NSColor) {
         NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color])
             .draw(at: point)
+    }
+
+    private func drawTextWrapped(_ string: String, in rect: NSRect, font: NSFont, color: NSColor) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        NSAttributedString(string: string, attributes: [
+            .font: font,
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]).draw(in: rect)
     }
 
     private func fillRounded(_ rect: NSRect, radius: CGFloat, color: NSColor) {

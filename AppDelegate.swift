@@ -34,7 +34,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         setupStatusItem()
-        showKeychainIntroIfNeeded()
         enableLaunchAtLoginOnFirstRun()
         startTimer(interval: baseRefreshInterval)
         refresh()
@@ -69,35 +68,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !isLaunchAtLoginEnabled {
             setLaunchAtLogin(true)
         }
-    }
-
-    /// One-time explainer shown before the first Keychain access, so the system
-    /// permission prompt that follows isn't a surprise.
-    private func showKeychainIntroIfNeeded() {
-        let key = "didShowKeychainIntro"
-        let defaults = UserDefaults.standard
-        if defaults.bool(forKey: key) { return }
-
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Claude Usage Stats reads your Claude Code login"
-        alert.informativeText = """
-        To show your usage it reads your Claude Code sign-in token from the macOS \
-        Keychain and calls the same endpoint as the “claude /usage” command. The \
-        token is used only for that request to Anthropic — it is never written, \
-        changed, or shared.
-
-        Next, macOS will ask to access “Claude Code-credentials”. Choose \
-        “Always Allow” so your usage can refresh automatically.
-        """
-        alert.addButton(withTitle: "Continue")
-        alert.addButton(withTitle: "Quit")
-        if alert.runModal() == .alertSecondButtonReturn {
-            NSApp.terminate(nil)
-            return
-        }
-        defaults.set(true, forKey: key)
     }
 
     private func setupStatusItem() {

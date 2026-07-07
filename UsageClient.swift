@@ -22,6 +22,7 @@ struct UsageSnapshot {
 }
 
 enum UsageError: Error {
+    case claudeCliNotInstalled
     case noCredentials
     case tokenExpired
     case rateLimited(retryAfterSeconds: Int?)
@@ -31,90 +32,89 @@ enum UsageError: Error {
 
     var message: String {
         switch self {
-        case .noCredentials: return "Not signed in — open Claude Code"
-        case .tokenExpired:  return "Auth expired — open Claude Code"
+        case .claudeCliNotInstalled: return "Claude CLI not found — run: npm i -g @anthropic-ai/claude-code"
+        case .noCredentials:         return "Not signed in — run 'claude' in Terminal to login"
+        case .tokenExpired:          return "Auth expired — run 'claude' in Terminal to login"
         case .rateLimited(let retry):
             if let r = retry, r > 0 {
                 let mins = max(1, (r + 59) / 60)
                 return "Rate limited — retrying in \(mins)m"
             }
             return "Rate limited — will retry"
-        case .http(let c):   return c == 429 ? "Rate limited — will retry" : "Server error (HTTP \(c))"
-        case .badResponse:   return "Unexpected response"
-        case .network(let m): return m
+        case .http(let c):           return c == 429 ? "Rate limited — will retry" : "Server error (HTTP \(c))"
+        case .badResponse:           return "Unexpected response"
+        case .network(let m):        return m
         }
     }
 }
 
 // MARK: - Client
 
-/// Reads the Claude Code OAuth token from the login Keychain and calls the
-/// same `/api/oauth/usage` endpoint that the `claude /usage` command uses.
+/// Invokes the local `claude` CLI via `/bin/zsh -lc` to fetch usage limits and
+/// parses the output.
 final class UsageClient {
-
-    private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    private let keychainService = "Claude Code-credentials"
 
     /// Fetch a fresh snapshot. `completion` is always called on the main thread.
     func fetch(completion: @escaping (Result<UsageSnapshot, UsageError>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
-            guard let token = self.readAccessToken() else {
-                return self.finish(.failure(.noCredentials), completion)
-            }
+            let task = Process()
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
 
-            ClaudeVersionProvider.shared.refreshIfNeeded()
-            let version = ClaudeVersionProvider.shared.currentVersion
+            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            task.arguments = ["-lc", "claude -p '/usage' < /dev/null"]
+            task.currentDirectoryURL = URL(fileURLWithPath: "/tmp")
+            task.standardOutput = stdoutPipe
+            task.standardError = stderrPipe
 
-            var req = URLRequest(url: self.endpoint)
-            req.httpMethod = "GET"
-            req.timeoutInterval = 15
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-            req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.setValue("claude-code/\(version)", forHTTPHeaderField: "User-Agent")
+            do {
+                try task.run()
+                task.waitUntilExit()
 
-            URLSession.shared.dataTask(with: req) { data, resp, err in
-                if let err = err {
-                    return self.finish(.failure(.network(err.localizedDescription)), completion)
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+                let stdoutStr = String(data: stdoutData, encoding: .utf8) ?? ""
+                let stderrStr = String(data: stderrData, encoding: .utf8) ?? ""
+                let status = task.terminationStatus
+
+                if status == 127 || stdoutStr.contains("command not found") || stderrStr.contains("command not found") {
+                    return self.finish(.failure(.claudeCliNotInstalled), completion)
                 }
-                guard let http = resp as? HTTPURLResponse else {
+
+                if status != 0 {
+                    let errorMsg = (stdoutStr + stderrStr).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if Self.isAuthError(errorMsg) {
+                        return self.finish(.failure(.noCredentials), completion)
+                    }
+                    return self.finish(.failure(.network(errorMsg.isEmpty ? "Claude CLI exited with code \(status)" : errorMsg)), completion)
+                }
+
+                guard let snapshot = Self.parseCLIOutput(stdoutStr) else {
+                    let combined = stdoutStr + stderrStr
+                    if Self.isAuthError(combined) {
+                        return self.finish(.failure(.noCredentials), completion)
+                    }
                     return self.finish(.failure(.badResponse), completion)
                 }
-                if http.statusCode == 401 || http.statusCode == 403 {
-                    return self.finish(.failure(.tokenExpired), completion)
-                }
-                if http.statusCode == 429 {
-                    let retrySeconds = self.parseRetryAfter(http)
-                    return self.finish(.failure(.rateLimited(retryAfterSeconds: retrySeconds)), completion)
-                }
-                guard http.statusCode == 200, let data = data else {
-                    return self.finish(.failure(.http(http.statusCode)), completion)
-                }
-                guard let snapshot = Self.parse(data) else {
-                    return self.finish(.failure(.badResponse), completion)
-                }
+
                 self.finish(.success(snapshot), completion)
-            }.resume()
+            } catch {
+                self.finish(.failure(.network(error.localizedDescription)), completion)
+            }
         }
     }
 
-    private func parseRetryAfter(_ http: HTTPURLResponse) -> Int? {
-        guard let headerValue = http.value(forHTTPHeaderField: "Retry-After") ?? http.value(forHTTPHeaderField: "retry-after") else {
-            return nil
-        }
-        let trimmed = headerValue.trimmingCharacters(in: .whitespaces)
-        if let seconds = Int(trimmed) {
-            return seconds
-        }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        if let date = formatter.date(from: trimmed) {
-            let diff = Int(date.timeIntervalSinceNow)
-            return diff > 0 ? diff : nil
-        }
-        return nil
+    private static func isAuthError(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        return normalized.contains("not signed in") ||
+               normalized.contains("sign in") ||
+               normalized.contains("sign-in") ||
+               normalized.contains("auth login") ||
+               normalized.contains("credentials") ||
+               normalized.contains("logged in") ||
+               normalized.contains("authenticate") ||
+               normalized.contains("login")
     }
 
     private func finish(_ result: Result<UsageSnapshot, UsageError>,
@@ -122,98 +122,127 @@ final class UsageClient {
         DispatchQueue.main.async { completion(result) }
     }
 
-    // MARK: Keychain
-
-    /// Reads `accessToken` from the "Claude Code-credentials" generic password.
-    /// The first access triggers a one-time macOS Keychain permission prompt.
-    private func readAccessToken() -> String? {
-        // Optional override (used by --selftest and headless setups); ignored in
-        // normal use where the token comes from the Keychain.
-        if let t = ProcessInfo.processInfo.environment["CLAUDE_USAGE_TOKEN"], !t.isEmpty {
-            return t
-        }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-
-        let oauth = (json["claudeAiOauth"] as? [String: Any]) ?? json
-        return oauth["accessToken"] as? String
-    }
-
     // MARK: Parsing
 
-    static func parse(_ data: Data) -> UsageSnapshot? {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-
+    static func parseCLIOutput(_ text: String) -> UsageSnapshot? {
+        let lines = text.components(separatedBy: .newlines)
         var limits: [UsageLimit] = []
 
-        if let arr = root["limits"] as? [[String: Any]] {
-            for item in arr {
-                guard let kind = item["kind"] as? String else { continue }
-                let percent = (item["percent"] as? NSNumber)?.intValue ?? 0
-                let severity = item["severity"] as? String ?? "normal"
-                let resetsAt = (item["resets_at"] as? String).flatMap(parseDate)
-                let title = titleFor(kind: kind, scope: item["scope"] as? [String: Any])
-                limits.append(UsageLimit(kind: kind, title: title, percent: percent,
-                                         severity: severity, resetsAt: resetsAt))
-            }
-        }
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
 
-        // Fallback: derive from the top-level windows if `limits` is absent.
-        if limits.isEmpty {
-            if let l = window(root, "five_hour", "session", "Current session") { limits.append(l) }
-            if let l = window(root, "seven_day", "weekly_all", "Current week (all models)") { limits.append(l) }
+            // Match lines like:
+            // "Current session: 2% used · resets Jul 7 at 1:59pm (Asia/Saigon)"
+            guard trimmed.contains("%") && trimmed.contains("used") else { continue }
+
+            let parts = trimmed.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+
+            let title = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let rightSide = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let rightParts = rightSide.components(separatedBy: "·")
+            guard !rightParts.isEmpty else { continue }
+
+            let percentStr = rightParts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            var percent = 0
+            if let pctIndex = percentStr.firstIndex(of: "%") {
+                let numPart = percentStr[..<pctIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+                let digits = numPart.filter { $0.isNumber }
+                percent = Int(digits) ?? 0
+            }
+
+            var resetsAt: Date? = nil
+            if rightParts.count >= 2 {
+                resetsAt = parseCLIDate(rightParts[1])
+            }
+
+            let kind: String
+            if title.lowercased().contains("session") {
+                kind = "session"
+            } else if title.lowercased().contains("all models") {
+                kind = "weekly_all"
+            } else {
+                kind = "weekly_scoped"
+            }
+
+            let severity: String
+            if percent >= 90 {
+                severity = "critical"
+            } else if percent >= 75 {
+                severity = "warning"
+            } else {
+                severity = "normal"
+            }
+
+            limits.append(UsageLimit(kind: kind, title: title, percent: percent, severity: severity, resetsAt: resetsAt))
         }
 
         guard !limits.isEmpty else { return nil }
         return UsageSnapshot(limits: limits, fetchedAt: Date())
     }
 
-    private static func window(_ root: [String: Any], _ key: String,
-                               _ kind: String, _ title: String) -> UsageLimit? {
-        guard let obj = root[key] as? [String: Any],
-              let util = (obj["utilization"] as? NSNumber)?.doubleValue else { return nil }
-        return UsageLimit(kind: kind, title: title, percent: Int(util.rounded()),
-                          severity: "normal",
-                          resetsAt: (obj["resets_at"] as? String).flatMap(parseDate))
-    }
-
-    private static func titleFor(kind: String, scope: [String: Any]?) -> String {
-        switch kind {
-        case "session":    return "Current session"
-        case "weekly_all": return "Current week (all models)"
-        case "weekly_scoped":
-            if let model = scope?["model"] as? [String: Any],
-               let name = model["display_name"] as? String {
-                return "Current week (\(name))"
-            }
-            return "Current week"
-        default:           return kind
-        }
-    }
-
     // MARK: Dates
 
-    private static let isoParser: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"   // handles "+00:00"
-        return f
-    }()
+    static func parseCLIDate(_ s: String) -> Date? {
+        var cleaned = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("resets ") {
+            cleaned = String(cleaned.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
 
-    /// Parses e.g. "2026-07-06T05:49:59.624980+00:00" (sub-second precision dropped).
-    static func parseDate(_ s: String) -> Date? {
-        let cleaned = s.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
-        return isoParser.date(from: cleaned)
+        // Extract timezone if present in parentheses
+        var tz: TimeZone? = nil
+        if let openParen = cleaned.firstIndex(of: "("),
+           let closeParen = cleaned.firstIndex(of: ")"),
+           openParen < closeParen {
+            let tzStr = String(cleaned[cleaned.index(after: openParen)..<closeParen])
+            tz = TimeZone(identifier: tzStr)
+            cleaned = String(cleaned[..<openParen]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = tz ?? TimeZone.current
+
+        let formats = ["MMM d 'at' h:mma", "MMM d 'at' ha", "MMM d 'at' h:mm a", "MMM d 'at' h a"]
+        var parsedDate: Date? = nil
+        for format in formats {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: cleaned) {
+                parsedDate = date
+                break
+            }
+        }
+
+        guard let date = parsedDate else { return nil }
+
+        // Adjust to current year since DateFormatter defaults to 2000 when year is missing
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let parsedComp = Calendar.current.dateComponents(in: tz ?? TimeZone.current, from: date)
+        
+        var comp = DateComponents()
+        comp.timeZone = tz ?? TimeZone.current
+        comp.year = currentYear
+        comp.month = parsedComp.month
+        comp.day = parsedComp.day
+        comp.hour = parsedComp.hour
+        comp.minute = parsedComp.minute
+        comp.second = parsedComp.second
+
+        if let resultDate = Calendar.current.date(from: comp) {
+            // Adjust if date wraps around new year boundaries
+            if resultDate.timeIntervalSinceNow < -86400 * 180 {
+                comp.year = currentYear + 1
+                return Calendar.current.date(from: comp)
+            } else if resultDate.timeIntervalSinceNow > 86400 * 180 {
+                comp.year = currentYear - 1
+                return Calendar.current.date(from: comp)
+            }
+            return resultDate
+        }
+
+        return date
     }
 }
 

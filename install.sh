@@ -61,8 +61,6 @@ open "${APP_PATH}"
 
 echo ""
 echo "=== Done. ${APP_NAME} is running in your menu bar. ==="
-echo "On first launch it explains what it does, then macOS asks to read your"
-echo "Claude Code login from the Keychain — choose \"Always Allow\"."
 echo ""
 echo "To uninstall at any time, run:"
 echo "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/uninstall.sh | bash"

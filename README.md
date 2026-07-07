@@ -39,25 +39,17 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 
 ## How it works
 
-There's no public usage API, so the app does exactly what the CLI does:
+The app fetches your usage limits directly from the local `claude` CLI tool:
 
-1. Reads your Claude Code sign-in token from the login Keychain
-   (`Claude Code-credentials`).
-2. Calls `GET https://api.anthropic.com/api/oauth/usage` with that token.
-3. Renders the `limits` it returns.
+1. Runs the command `claude -p "/usage" < /dev/null` in a login shell (`/bin/zsh -lc`).
+2. Parses the plain-text CLI output to extract percentages, limit names, and reset times.
+3. Renders the extracted info and updates automatically.
 
-Nothing is sent anywhere except that one request to Anthropic — the same call
-`claude /usage` makes. The app **never writes** to your Keychain.
+No Keychain access is required. The app doesn't touch your credentials.
 
-**First launch:** the app explains this, then macOS shows a one-time Keychain
-prompt ("ClaudeUsageStats wants to use … Claude Code-credentials"). Click
-**Always Allow**.
+**First launch:** The app works out of the box with no extra permissions, as long as `claude` is installed on your machine and you are logged in.
 
-**Token expiry:** Claude Code tokens last ~5 hours and Claude Code refreshes
-them as you use it. If you haven't used Claude Code in a while the token can be
-expired; the app keeps showing the last numbers and the tooltip explains — just
-use Claude Code once to refresh. (The app deliberately doesn't refresh tokens
-itself, to avoid touching your login credentials.)
+**Command Not Found:** If the `claude` command is not available, the app displays a warning panel suggesting to install it.
 
 ## Build from source
 
@@ -70,14 +62,14 @@ open ClaudeUsageStats.app
 ## Requirements
 
 - macOS 11+
-- Signed in to Claude Code (`claude`) on this machine
+- Claude CLI (`claude`) installed on this machine and logged in
 - Xcode command-line tools (`swiftc`) to build
 
 ## Debugging
 
 ```bash
-# Print what the menu bar / panel would show, without the GUI or Keychain.
-CLAUDE_USAGE_TOKEN=… ./ClaudeUsageStats.app/Contents/MacOS/ClaudeUsageStats --selftest
+# Print what the menu bar / panel would show, without the GUI.
+./ClaudeUsageStats.app/Contents/MacOS/ClaudeUsageStats --selftest
 
 # Re-render the README screenshot from the real views.
 ./ClaudeUsageStats.app/Contents/MacOS/ClaudeUsageStats --screenshot screenshot.png
