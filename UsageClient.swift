@@ -57,50 +57,57 @@ final class UsageClient {
     /// Fetch a fresh snapshot. `completion` is always called on the main thread.
     func fetch(completion: @escaping (Result<UsageSnapshot, UsageError>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
-            let task = Process()
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
+            autoreleasepool {
+                let task = Process()
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
 
-            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            task.arguments = ["-lc", "claude -p '/usage' < /dev/null"]
-            task.currentDirectoryURL = URL(fileURLWithPath: "/tmp")
-            task.standardOutput = stdoutPipe
-            task.standardError = stderrPipe
+                var env = ProcessInfo.processInfo.environment
+                env["PATH"] = PathResolver.cachedPath
+                task.environment = env
 
-            do {
-                try task.run()
-                task.waitUntilExit()
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                task.arguments = ["claude", "-p", "/usage"]
+                task.currentDirectoryURL = URL(fileURLWithPath: "/tmp")
+                task.standardOutput = stdoutPipe
+                task.standardError = stderrPipe
+                task.standardInput = FileHandle.nullDevice
 
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                do {
+                    try task.run()
+                    task.waitUntilExit()
 
-                let stdoutStr = String(data: stdoutData, encoding: .utf8) ?? ""
-                let stderrStr = String(data: stderrData, encoding: .utf8) ?? ""
-                let status = task.terminationStatus
+                    let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
 
-                if status == 127 || stdoutStr.contains("command not found") || stderrStr.contains("command not found") {
-                    return self.finish(.failure(.claudeCliNotInstalled), completion)
-                }
+                    let stdoutStr = String(data: stdoutData, encoding: .utf8) ?? ""
+                    let stderrStr = String(data: stderrData, encoding: .utf8) ?? ""
+                    let status = task.terminationStatus
 
-                if status != 0 {
-                    let errorMsg = (stdoutStr + stderrStr).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if Self.isAuthError(errorMsg) {
-                        return self.finish(.failure(.noCredentials), completion)
+                    if status == 127 || stdoutStr.contains("command not found") || stderrStr.contains("command not found") {
+                        return self.finish(.failure(.claudeCliNotInstalled), completion)
                     }
-                    return self.finish(.failure(.network(errorMsg.isEmpty ? "Claude CLI exited with code \(status)" : errorMsg)), completion)
-                }
 
-                guard let snapshot = Self.parseCLIOutput(stdoutStr) else {
-                    let combined = stdoutStr + stderrStr
-                    if Self.isAuthError(combined) {
-                        return self.finish(.failure(.noCredentials), completion)
+                    if status != 0 {
+                        let errorMsg = (stdoutStr + stderrStr).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if Self.isAuthError(errorMsg) {
+                            return self.finish(.failure(.noCredentials), completion)
+                        }
+                        return self.finish(.failure(.network(errorMsg.isEmpty ? "Claude CLI exited with code \(status)" : errorMsg)), completion)
                     }
-                    return self.finish(.failure(.badResponse), completion)
-                }
 
-                self.finish(.success(snapshot), completion)
-            } catch {
-                self.finish(.failure(.network(error.localizedDescription)), completion)
+                    guard let snapshot = Self.parseCLIOutput(stdoutStr) else {
+                        let combined = stdoutStr + stderrStr
+                        if Self.isAuthError(combined) {
+                            return self.finish(.failure(.noCredentials), completion)
+                        }
+                        return self.finish(.failure(.badResponse), completion)
+                    }
+
+                    self.finish(.success(snapshot), completion)
+                } catch {
+                    self.finish(.failure(.network(error.localizedDescription)), completion)
+                }
             }
         }
     }
@@ -357,24 +364,31 @@ final class ClaudeVersionProvider {
     }
 
     private func detectLocalVersion() -> String? {
-        let task = Process()
-        let pipe = Pipe()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        task.arguments = ["claude", "--version"]
-        task.standardOutput = pipe
-        task.standardError = Pipe()
+        autoreleasepool {
+            let task = Process()
+            let pipe = Pipe()
+            
+            var env = ProcessInfo.processInfo.environment
+            env["PATH"] = PathResolver.cachedPath
+            task.environment = env
+            
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            task.arguments = ["claude", "--version"]
+            task.standardOutput = pipe
+            task.standardError = Pipe()
 
-        do {
-            try task.run()
-            task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) {
-                let components = str.components(separatedBy: " ")
-                if let ver = components.first, !ver.isEmpty, ver.contains(".") {
-                    return ver
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    let components = str.components(separatedBy: " ")
+                    if let ver = components.first, !ver.isEmpty, ver.contains(".") {
+                        return ver
+                    }
                 }
-            }
-        } catch {}
-        return nil
+            } catch {}
+            return nil
+        }
     }
 }

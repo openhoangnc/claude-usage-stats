@@ -14,6 +14,7 @@ swiftc -Osize -wmo \
     -framework Foundation \
     -framework Security \
     -framework ServiceManagement \
+    PathResolver.swift \
     UsageClient.swift \
     UsageColors.swift \
     StatusBarView.swift \

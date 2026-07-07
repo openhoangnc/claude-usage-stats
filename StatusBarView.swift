@@ -26,16 +26,22 @@ final class StatusBarView: NSView {
     override func mouseDown(with event: NSEvent) { onClick?() }
     override func rightMouseDown(with event: NSEvent) { onRightClick?() }
 
+    private var cachedAppearance: NSAppearance?
+    private var cachedSessionString: NSAttributedString?
+    private var cachedWeekString: NSAttributedString?
+
     // MARK: Data
 
     func update(session: UsageLimit?, weekly: UsageLimit?) {
         sessionPct = session?.percent
         weekPct = weekly?.percent
+        cachedSessionString = nil
+        cachedWeekString = nil
         recomputeWidth()
         needsDisplay = true
     }
 
-    private func line(_ pct: Int?) -> NSAttributedString {
+    private func createLine(_ pct: Int?) -> NSAttributedString {
         if let pct = pct {
             return NSAttributedString(string: "\(pct)%", attributes: [
                 .font: Self.valueFont,
@@ -50,8 +56,26 @@ final class StatusBarView: NSView {
         ])
     }
 
+    private func getSessionString() -> NSAttributedString {
+        updateCachedStringsIfNeeded()
+        return cachedSessionString!
+    }
+
+    private func getWeekString() -> NSAttributedString {
+        updateCachedStringsIfNeeded()
+        return cachedWeekString!
+    }
+
+    private func updateCachedStringsIfNeeded() {
+        if cachedSessionString == nil || cachedWeekString == nil || cachedAppearance != effectiveAppearance {
+            cachedAppearance = effectiveAppearance
+            cachedSessionString = createLine(sessionPct)
+            cachedWeekString = createLine(weekPct)
+        }
+    }
+
     private func recomputeWidth() {
-        let w = max(line(sessionPct).size().width, line(weekPct).size().width)
+        let w = max(getSessionString().size().width, getWeekString().size().width)
         let newWidth = max(22, ceil(w))
         if abs(newWidth - preferredWidth) > 0.5 {
             preferredWidth = newWidth
@@ -63,7 +87,7 @@ final class StatusBarView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let w = bounds.width
-        line(sessionPct).draw(in: NSRect(x: 0, y: 11, width: w, height: 11))
-        line(weekPct).draw(in: NSRect(x: 0, y: 1,  width: w, height: 11))
+        getSessionString().draw(in: NSRect(x: 0, y: 11, width: w, height: 11))
+        getWeekString().draw(in: NSRect(x: 0, y: 1,  width: w, height: 11))
     }
 }
