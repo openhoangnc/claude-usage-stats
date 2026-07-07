@@ -13,7 +13,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentRefreshInterval: TimeInterval = 120
 
     private var lastRefreshAt: Date?
-    private var rateLimitedUntil: Date?
     private let menuRefreshThrottle: TimeInterval = 30   // skip the on-open auto-refresh if we just fetched
 
     private var lastSnapshot: UsageSnapshot?
@@ -100,12 +99,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var loggedFirstResult = false
 
     @objc private func refresh() {
-        if let until = rateLimitedUntil, Date() < until {
-            let remaining = Int(ceil(until.timeIntervalSinceNow))
-            NSLog("ClaudeUsageStats:refresh skipped — currently rate limited for \(remaining)s")
-            return
-        }
-
         lastRefreshAt = Date()
         client.fetch { [weak self] result in
             guard let self = self else { return }
@@ -113,7 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .success(let snapshot):
                 self.lastSnapshot = snapshot
                 self.lastError = nil
-                self.rateLimitedUntil = nil
                 if self.currentRefreshInterval != self.baseRefreshInterval {
                     self.startTimer(interval: self.baseRefreshInterval)
                 }
@@ -126,18 +118,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .failure(let error):
                 self.lastError = error   // keep last good numbers in the bar
                 NSLog("ClaudeUsageStats:fetch failed — \(error.message)")
-
-                if case .rateLimited(let retrySeconds) = error {
-                    let backoffSecs: TimeInterval
-                    if let r = retrySeconds, r > 0 {
-                        backoffSecs = TimeInterval(r)
-                    } else {
-                        backoffSecs = min(self.currentRefreshInterval * 2, 900) // max 15m
-                    }
-                    self.rateLimitedUntil = Date().addingTimeInterval(backoffSecs)
-                    self.startTimer(interval: backoffSecs)
-                    NSLog("ClaudeUsageStats: rate limited, backing off for \(Int(backoffSecs))s")
-                }
             }
             self.applyState()
         }
@@ -161,10 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMenu() {
         applyState()               // show the freshest data we have
 
-        // Fetch again in the background, unless we just refreshed or are rate limited
-        if let until = rateLimitedUntil, Date() < until {
-            // currently rate limited, keep current data
-        } else if let last = lastRefreshAt, Date().timeIntervalSince(last) < menuRefreshThrottle {
+        // Fetch again in the background, unless we just refreshed
+        if let last = lastRefreshAt, Date().timeIntervalSince(last) < menuRefreshThrottle {
             // recent enough; keep the current numbers
         } else {
             refresh()

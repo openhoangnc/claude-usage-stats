@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 // MARK: - Models
 
@@ -24,9 +23,6 @@ struct UsageSnapshot {
 enum UsageError: Error {
     case claudeCliNotInstalled
     case noCredentials
-    case tokenExpired
-    case rateLimited(retryAfterSeconds: Int?)
-    case http(Int)
     case badResponse
     case network(String)
 
@@ -34,14 +30,6 @@ enum UsageError: Error {
         switch self {
         case .claudeCliNotInstalled: return "Claude CLI not found — run: npm i -g @anthropic-ai/claude-code"
         case .noCredentials:         return "Not signed in — run 'claude' in Terminal to login"
-        case .tokenExpired:          return "Auth expired — run 'claude' in Terminal to login"
-        case .rateLimited(let retry):
-            if let r = retry, r > 0 {
-                let mins = max(1, (r + 59) / 60)
-                return "Rate limited — retrying in \(mins)m"
-            }
-            return "Rate limited — will retry"
-        case .http(let c):           return c == 429 ? "Rate limited — will retry" : "Server error (HTTP \(c))"
         case .badResponse:           return "Unexpected response"
         case .network(let m):        return m
         }
@@ -306,89 +294,5 @@ enum UsageFormat {
         if s < 60  { return "\(s)s ago" }
         if s < 3600 { return "\(s / 60)m ago" }
         return "\(s / 3600)h ago"
-    }
-}
-
-// MARK: - Version Provider
-
-/// Automatically keeps the `claude-code/<version>` User-Agent header string up to date.
-/// Checks the npm registry (`@anthropic-ai/claude-code/latest`) once every 24 hours
-/// and caches the latest version in `UserDefaults`. Fallbacks to local `claude --version`
-/// or default version.
-final class ClaudeVersionProvider {
-    static let shared = ClaudeVersionProvider()
-
-    private let userDefaultsKey = "cachedClaudeCodeVersion"
-    private let lastCheckKey = "lastClaudeCodeVersionCheckDate"
-    private let defaultVersion = "2.1.201"
-
-    var currentVersion: String {
-        get {
-            UserDefaults.standard.string(forKey: userDefaultsKey) ?? detectLocalVersion() ?? defaultVersion
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: userDefaultsKey)
-        }
-    }
-
-    func refreshIfNeeded() {
-        let lastCheck = UserDefaults.standard.object(forKey: lastCheckKey) as? Date ?? .distantPast
-        let twentyFourHours: TimeInterval = 86400
-
-        guard Date().timeIntervalSince(lastCheck) >= twentyFourHours else { return }
-
-        fetchLatestFromNpm { [weak self] latestVersion in
-            guard let self = self, let version = latestVersion else { return }
-            self.currentVersion = version
-            UserDefaults.standard.set(Date(), forKey: self.lastCheckKey)
-            NSLog("ClaudeUsageStats: Updated latest Claude Code version to \(version)")
-        }
-    }
-
-    private func fetchLatestFromNpm(completion: @escaping (String?) -> Void) {
-        guard let url = URL(string: "https://registry.npmjs.org/@anthropic-ai/claude-code/latest") else {
-            completion(nil)
-            return
-        }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 10
-        URLSession.shared.dataTask(with: req) { data, _, err in
-            guard err == nil, let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let version = json["version"] as? String else {
-                completion(nil)
-                return
-            }
-            completion(version)
-        }.resume()
-    }
-
-    private func detectLocalVersion() -> String? {
-        autoreleasepool {
-            let task = Process()
-            let pipe = Pipe()
-            
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = PathResolver.cachedPath
-            task.environment = env
-            
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            task.arguments = ["claude", "--version"]
-            task.standardOutput = pipe
-            task.standardError = Pipe()
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) {
-                    let components = str.components(separatedBy: " ")
-                    if let ver = components.first, !ver.isEmpty, ver.contains(".") {
-                        return ver
-                    }
-                }
-            } catch {}
-            return nil
-        }
     }
 }
