@@ -39,6 +39,13 @@ enum UsageColors {
     static func color(percent: Int, isDark: Bool) -> NSColor {
         (isDark ? darkTiers : lightTiers)[tierIndex(percent)]
     }
+
+    /// Tint for the "stale usage" warning mark. Reuses the AAA-verified top
+    /// tier (salmon in dark, deep red in light) so it stands out yet stays
+    /// legible against the menu bar.
+    static func warning(isDark: Bool) -> NSColor {
+        (isDark ? darkTiers : lightTiers)[4]
+    }
 }
 
 extension NSView {

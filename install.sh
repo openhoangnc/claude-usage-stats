@@ -17,27 +17,48 @@ echo "=== Installing ${APP_NAME} ==="
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-LATEST_ZIP_URL="https://github.com/${REPO}/releases/latest/download/${ZIP_NAME}"
-
-echo "[1/4] Downloading latest release..."
-if curl -fsSL -o "${TMP_DIR}/${ZIP_NAME}" "${LATEST_ZIP_URL}"; then
-    echo "--> Downloaded ${ZIP_NAME} from GitHub Release."
-    unzip -q "${TMP_DIR}/${ZIP_NAME}" -d "${TMP_DIR}"
-else
-    echo "--> No prebuilt release available; building from source."
+# Compile the Swift sources in $1, producing $1/<app>.app.
+build_app() {
+    local src_dir="$1"
     if ! command -v swiftc >/dev/null 2>&1; then
         echo "Error: swiftc not found. Install Xcode command-line tools: xcode-select --install"
         exit 1
     fi
-    # Use the current checkout if run from the repo, otherwise clone it (curl | bash).
-    SRC_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
-    if [ ! -f "${SRC_DIR}/build.sh" ] || [ ! -f "${SRC_DIR}/main.swift" ]; then
-        echo "--> Fetching source..."
-        git clone --depth 1 "https://github.com/${REPO}.git" "${TMP_DIR}/src"
-        SRC_DIR="${TMP_DIR}/src"
+    ( cd "${src_dir}" \
+        && { [ -f AppIcon.icns ] || ./make_icon.sh >/dev/null; } \
+        && ./build.sh >/dev/null )
+}
+
+# Are we running from a local checkout? The script then sits next to the Swift
+# sources. A piped run (curl | bash) has no on-disk script, so SRC_DIR stays empty.
+SCRIPT_SRC="${BASH_SOURCE[0]:-$0}"
+SRC_DIR=""
+if [ -f "$SCRIPT_SRC" ]; then
+    CANDIDATE="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
+    if [ -f "${CANDIDATE}/build.sh" ] && [ -f "${CANDIDATE}/main.swift" ]; then
+        SRC_DIR="$CANDIDATE"
     fi
-    ( cd "${SRC_DIR}" && ./make_icon.sh >/dev/null && ./build.sh >/dev/null )
+fi
+
+if [ -n "$SRC_DIR" ]; then
+    # Local checkout: build and install YOUR current sources, not the release.
+    echo "[1/4] Building from local source..."
+    echo "--> ${SRC_DIR}"
+    build_app "${SRC_DIR}"
     cp -R "${SRC_DIR}/${APP_NAME}.app" "${TMP_DIR}/"
+else
+    # Remote: download the latest published release, else clone and build.
+    echo "[1/4] Downloading latest release..."
+    LATEST_ZIP_URL="https://github.com/${REPO}/releases/latest/download/${ZIP_NAME}"
+    if curl -fsSL -o "${TMP_DIR}/${ZIP_NAME}" "${LATEST_ZIP_URL}"; then
+        echo "--> Downloaded ${ZIP_NAME} from GitHub Release."
+        unzip -q "${TMP_DIR}/${ZIP_NAME}" -d "${TMP_DIR}"
+    else
+        echo "--> No prebuilt release available; building from source."
+        git clone --depth 1 "https://github.com/${REPO}.git" "${TMP_DIR}/src"
+        build_app "${TMP_DIR}/src"
+        cp -R "${TMP_DIR}/src/${APP_NAME}.app" "${TMP_DIR}/"
+    fi
 fi
 
 if [ ! -d "${TMP_DIR}/${APP_NAME}.app" ]; then

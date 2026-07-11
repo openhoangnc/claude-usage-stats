@@ -24,5 +24,7 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Claude Usage Stats opens Terminal to run a suggested command, such as signing in to the Claude CLI.</string>
 </dict>
 </plist>

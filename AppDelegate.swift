@@ -15,8 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastRefreshAt: Date?
     private let menuRefreshThrottle: TimeInterval = 30   // skip the on-open auto-refresh if we just fetched
 
+    private let launchedAt = Date()
+    private var lastSuccessAt: Date?
+    private let staleThreshold: TimeInterval = 120   // warn if no fresh usage for 2 minutes
+
     private var lastSnapshot: UsageSnapshot?
     private var lastError: UsageError?
+
+    /// Command to run when "Fix in Terminal…" is chosen; set while a menu is open.
+    private var pendingSuggestedCommand: String?
 
     private let bundleId = "com.openhoangnc.claudeusagestats"
     private lazy var launchAgentPath =
@@ -82,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusView.frame = button.bounds
             statusView.autoresizingMask = [.width, .height]
         }
-        statusView.update(session: nil, weekly: nil)
+        statusView.update(session: nil, weekly: nil, stale: false)
     }
 
     // MARK: Refresh
@@ -106,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .success(let snapshot):
                 self.lastSnapshot = snapshot
                 self.lastError = nil
+                self.lastSuccessAt = snapshot.fetchedAt
                 if self.currentRefreshInterval != self.baseRefreshInterval {
                     self.startTimer(interval: self.baseRefreshInterval)
                 }
@@ -123,8 +131,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// True when the latest fetch failed *and* we've had no successful usage for
+    /// longer than `staleThreshold` — i.e. we "could not get usage in the last 2
+    /// minutes". Measured from the last success, or from launch if never. Gating
+    /// on an actual error avoids a false warning during the timer's tolerance
+    /// window, when healthy data can briefly age past the threshold.
+    private var usageIsStale: Bool {
+        guard lastError != nil else { return false }
+        return Date().timeIntervalSince(lastSuccessAt ?? launchedAt) > staleThreshold
+    }
+
     private func applyState() {
-        statusView.update(session: lastSnapshot?.session, weekly: lastSnapshot?.weeklyAll)
+        statusView.update(session: lastSnapshot?.session,
+                          weekly: lastSnapshot?.weeklyAll,
+                          stale: usageIsStale)
         panelView.render(snapshot: lastSnapshot, error: lastError?.message)
 
         if let snapshot = lastSnapshot {
@@ -154,6 +174,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         detail.view = panelView
         menu.addItem(detail)
         menu.addItem(.separator())
+
+        // When the current error has a fix (login / install), offer to run it.
+        pendingSuggestedCommand = lastError?.suggestedCommand
+        if let cmd = pendingSuggestedCommand {
+            let fix = NSMenuItem(title: "Run “\(cmd)” in Terminal…",
+                                 action: #selector(runSuggestedCommand), keyEquivalent: "")
+            fix.target = self
+            menu.addItem(fix)
+            menu.addItem(.separator())
+        }
 
         let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refresh), keyEquivalent: "r")
         refreshItem.target = self
@@ -185,6 +215,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openGitHub() {
         if let url = URL(string: "https://github.com/openhoangnc/claude-usage-stats") {
             NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Launch the current error's suggested fix (e.g. `claude /login`) in a new
+    /// Terminal window. The command runs in an interactive login shell, so the
+    /// user's PATH resolves `claude` just as `claude /usage` would.
+    @objc private func runSuggestedCommand() {
+        guard let command = pendingSuggestedCommand else { return }
+        let escaped = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let source = """
+        tell application "Terminal"
+            activate
+            do script "\(escaped)"
+        end tell
+        """
+        var scriptError: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&scriptError)
+        if let scriptError = scriptError {
+            NSLog("ClaudeUsageStats:runSuggestedCommand failed — \(scriptError)")
         }
     }
 

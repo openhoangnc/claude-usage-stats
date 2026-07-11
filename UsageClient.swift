@@ -23,15 +23,25 @@ struct UsageSnapshot {
 enum UsageError: Error {
     case claudeCliNotInstalled
     case noCredentials
-    case badResponse
+    case sessionExpired
     case network(String)
 
     var message: String {
         switch self {
         case .claudeCliNotInstalled: return "Claude CLI not found — run: npm i -g @anthropic-ai/claude-code"
-        case .noCredentials:         return "Not signed in — run 'claude' in Terminal to login"
-        case .badResponse:           return "Unexpected response"
+        case .noCredentials:         return "Not signed in — run: claude /login"
+        case .sessionExpired:        return "Session may have expired — run: claude /login"
         case .network(let m):        return m
+        }
+    }
+
+    /// A one-shot shell command that resolves this error, if any. Surfaced as a
+    /// menu item the user can launch in Terminal.
+    var suggestedCommand: String? {
+        switch self {
+        case .claudeCliNotInstalled:            return "npm i -g @anthropic-ai/claude-code"
+        case .noCredentials, .sessionExpired:   return "claude /login"
+        case .network:                          return nil
         }
     }
 }
@@ -89,7 +99,10 @@ final class UsageClient {
                         if Self.isAuthError(combined) {
                             return self.finish(.failure(.noCredentials), completion)
                         }
-                        return self.finish(.failure(.badResponse), completion)
+                        // The CLI ran cleanly (exit 0) but returned no usage rows —
+                        // most commonly the login session has expired. Guide the
+                        // user to re-authenticate rather than showing a vague error.
+                        return self.finish(.failure(.sessionExpired), completion)
                     }
 
                     self.finish(.success(snapshot), completion)
