@@ -56,16 +56,22 @@ final class UsageClient {
     func fetch(completion: @escaping (Result<UsageSnapshot, UsageError>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             autoreleasepool {
+                // Locate `claude` the way the user's terminal does. If it can't
+                // be found the CLI isn't installed (or isn't on any login PATH).
+                guard let resolution = PathResolver.resolve() else {
+                    return self.finish(.failure(.claudeCliNotInstalled), completion)
+                }
+
                 let task = Process()
                 let stdoutPipe = Pipe()
                 let stderrPipe = Pipe()
 
                 var env = ProcessInfo.processInfo.environment
-                env["PATH"] = PathResolver.cachedPath
+                env["PATH"] = resolution.path
                 task.environment = env
 
-                task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                task.arguments = ["claude", "-p", "/usage"]
+                task.executableURL = URL(fileURLWithPath: resolution.claude)
+                task.arguments = ["-p", "/usage"]
                 task.currentDirectoryURL = URL(fileURLWithPath: "/tmp")
                 task.standardOutput = stdoutPipe
                 task.standardError = stderrPipe
