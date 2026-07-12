@@ -51,13 +51,21 @@ No Keychain access is required. The app doesn't touch your credentials.
 
 **Command Not Found:** If the `claude` command is not available, the app displays a warning panel suggesting to install it.
 
-## Build from source
+## Build & install from source
+
+Prefer to build it yourself? Clone the repo and run the installer. From a local
+checkout, `install.sh` compiles your current sources into a universal binary,
+installs the app to `/Applications`, and launches it — nothing is downloaded, so
+you run exactly the code in front of you.
 
 ```bash
-./make_icon.sh    # generates AppIcon.icns + icon.png
-./build.sh        # compiles ClaudeUsageStats.app
-open ClaudeUsageStats.app
+git clone https://github.com/openhoangnc/claude-usage-stats.git
+cd claude-usage-stats
+./install.sh
 ```
+
+Once it's up, enable **Launch at Login** from the menu (click the indicator →
+Launch at Login).
 
 ## Requirements
 

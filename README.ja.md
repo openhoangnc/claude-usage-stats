@@ -54,13 +54,21 @@ Keychain へのアクセスは不要です。アプリが認証情報に触れ�
 **コマンドが見つからない場合：** `claude` コマンドが利用できない場合、アプリはインストール
 を促す警告パネルを表示します。
 
-## ソースからビルド
+## ソースからビルドしてインストール
+
+自分でビルドしたい場合は、リポジトリをクローンしてインストーラーを実行します。
+ローカルのチェックアウトから実行すると、`install.sh` は現在のソースをユニバーサル
+バイナリにコンパイルし、アプリを `/Applications` にインストールして起動します
+— 何もダウンロードしないため、手元のコードそのものが動作します。
 
 ```bash
-./make_icon.sh    # AppIcon.icns + icon.png を生成
-./build.sh        # ClaudeUsageStats.app をコンパイル
-open ClaudeUsageStats.app
+git clone https://github.com/openhoangnc/claude-usage-stats.git
+cd claude-usage-stats
+./install.sh
 ```
+
+起動したら、メニューから**ログイン時に起動**を有効にできます（インジケーターを
+クリック → Launch at Login）。
 
 ## 必要環境
 

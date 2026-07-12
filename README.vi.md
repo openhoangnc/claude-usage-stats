@@ -55,13 +55,21 @@ miễn là `claude` đã được cài trên máy và bạn đã đăng nhập.
 **Không tìm thấy lệnh:** Nếu lệnh `claude` không khả dụng, ứng dụng hiển thị một
 bảng cảnh báo gợi ý cài đặt nó.
 
-## Dựng từ mã nguồn
+## Dựng và cài đặt từ mã nguồn
+
+Muốn tự dựng? Sao chép (clone) kho mã và chạy trình cài đặt. Khi chạy từ một bản
+checkout cục bộ, `install.sh` biên dịch mã nguồn hiện tại của bạn thành một tệp
+nhị phân universal, cài ứng dụng vào `/Applications` và khởi chạy — không tải gì
+về, nên bạn chạy đúng mã đang có trong tay.
 
 ```bash
-./make_icon.sh    # tạo AppIcon.icns + icon.png
-./build.sh        # biên dịch ClaudeUsageStats.app
-open ClaudeUsageStats.app
+git clone https://github.com/openhoangnc/claude-usage-stats.git
+cd claude-usage-stats
+./install.sh
 ```
+
+Sau khi ứng dụng đã chạy, bật **Launch at Login** (khởi chạy khi đăng nhập) từ
+menu (nhấp vào chỉ báo → Launch at Login).
 
 ## Yêu cầu
 

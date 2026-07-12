@@ -50,13 +50,19 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 
 **找不到命令：** 如果 `claude` 命令不可用，应用会显示一个警告面板，建议你安装它。
 
-## 从源码构建
+## 从源码构建并安装
+
+想自己构建？克隆仓库并运行安装脚本。从本地检出运行时，`install.sh` 会把你当前的
+源码编译成通用（universal）二进制，安装到 `/Applications` 并启动——不下载任何
+东西，因此运行的正是你手上的代码。
 
 ```bash
-./make_icon.sh    # 生成 AppIcon.icns + icon.png
-./build.sh        # 编译 ClaudeUsageStats.app
-open ClaudeUsageStats.app
+git clone https://github.com/openhoangnc/claude-usage-stats.git
+cd claude-usage-stats
+./install.sh
 ```
+
+启动后，在菜单中启用**开机自启动**（点击指示器 → Launch at Login）。
 
 ## 环境要求
 
