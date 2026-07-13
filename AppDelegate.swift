@@ -9,15 +9,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let client = UsageClient()
     private var timer: Timer?
-    private let baseRefreshInterval: TimeInterval = 120   // 2 minutes base interval
-    private var currentRefreshInterval: TimeInterval = 120
+    // Usage changes slowly and opening the menu always refreshes on demand, so
+    // the background timer can be gentle. Every `claude -p /usage` spawn is a
+    // chance to collide with the user's real Claude sessions at the OAuth
+    // token-refresh boundary, so we poll no more often than necessary.
+    private let baseRefreshInterval: TimeInterval = 300    // 5 minutes when healthy
+    private let maxRefreshInterval: TimeInterval = 1800    // cap for repeated transient failures
+    private let authFailRefreshInterval: TimeInterval = 900 // signed-out: only re-login recovers, so wait
+    private var currentRefreshInterval: TimeInterval = 300
 
     private var lastRefreshAt: Date?
     private let menuRefreshThrottle: TimeInterval = 30   // skip the on-open auto-refresh if we just fetched
 
     private let launchedAt = Date()
     private var lastSuccessAt: Date?
-    private let staleThreshold: TimeInterval = 120   // warn if no fresh usage for 2 minutes
+    private let staleThreshold: TimeInterval = 420   // warn if no fresh usage for 7 minutes
 
     private var lastSnapshot: UsageSnapshot?
     private var lastError: UsageError?
@@ -126,8 +132,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .failure(let error):
                 self.lastError = error   // keep last good numbers in the bar
                 NSLog("ClaudeUsageStats:fetch failed — \(error.message)")
+                self.backOffAfterFailure(error)
             }
             self.applyState()
+        }
+    }
+
+    /// Widen the polling interval after a failed fetch so a broken state isn't
+    /// hammered. A signed-out session only recovers when the user re-logs in, so
+    /// we wait a long time (opening the menu or "Refresh Now" still retries at
+    /// once); transient failures use plain exponential backoff up to a cap.
+    private func backOffAfterFailure(_ error: UsageError) {
+        let next: TimeInterval
+        switch error {
+        case .noCredentials, .sessionExpired:
+            next = authFailRefreshInterval
+        case .claudeCliNotInstalled, .unreadableUsage, .network:
+            next = min(currentRefreshInterval * 2, maxRefreshInterval)
+        }
+        if next != currentRefreshInterval {
+            startTimer(interval: next)
         }
     }
 

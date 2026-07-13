@@ -38,11 +38,17 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 
 ## 工作原理
 
-应用直接从本地的 `claude` CLI 工具获取你的使用上限：
+应用从本地的 `claude` CLI 工具获取你的使用上限，优先使用开销最小的方式：
 
-1. 在登录 shell（`/bin/zsh -lc`）中运行命令 `claude -p "/usage" < /dev/null`。
-2. 解析 CLI 的纯文本输出，提取百分比、上限名称和重置时间。
-3. 渲染提取到的信息并自动更新。
+1. 在交互式登录 shell 的 `PATH`（`/bin/zsh -ilc`）中定位 `claude`（这样 nvm/fnm/volta
+   和自定义前缀都能被解析到）。
+2. 运行 `claude -p /usage`（无界面）。如果该输出已包含上限进度条，则解析并渲染——完成。
+3. 否则（近期的 CLI 版本已从无界面输出中移除了这些进度条），改为在伪终端中驱动交互式
+   `/usage` 视图，抓取渲染出的进度条，并在开始任何对话轮次之前退出——因此不会向磁盘写入
+   任何内容，也不会影响你的使用统计。
+
+获取过程为单飞（single-flight，绝不会同时运行两个 `claude` 进程）；当使用上限接口被限流时，
+会作为临时退避（back-off）处理，而不是报错。
 
 无需访问钥匙串（Keychain）。应用不会接触你的凭据。
 
@@ -80,4 +86,5 @@ cd claude-usage-stats
 ./ClaudeUsageStats.app/Contents/MacOS/ClaudeUsageStats --screenshot screenshot.png
 ```
 
-刷新每 120 秒执行一次，并在你每次打开菜单时执行。面板底部会显示数据的最后更新时间。
+刷新每 5 分钟执行一次，并在你每次打开菜单时执行，连续出错时会逐步退避。面板底部会显示
+数据的最后更新时间。

@@ -41,11 +41,20 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 
 ## Cách hoạt động
 
-Ứng dụng lấy giới hạn mức sử dụng trực tiếp từ công cụ CLI `claude` cục bộ:
+Ứng dụng lấy giới hạn mức sử dụng từ công cụ CLI `claude` cục bộ, ưu tiên nguồn nhẹ nhất
+trước:
 
-1. Chạy lệnh `claude -p "/usage" < /dev/null` trong một login shell (`/bin/zsh -lc`).
-2. Phân tích đầu ra văn bản thuần của CLI để trích xuất phần trăm, tên giới hạn và thời điểm đặt lại.
-3. Hiển thị thông tin đã trích xuất và tự động cập nhật.
+1. Định vị `claude` trên `PATH` của login shell tương tác (`/bin/zsh -ilc`, để nvm/fnm/volta
+   và các prefix tùy chỉnh được phân giải).
+2. Chạy `claude -p /usage` (không giao diện). Nếu đầu ra đó đã chứa các thanh giới hạn thì
+   phân tích và hiển thị — xong.
+3. Nếu không (các phiên bản CLI gần đây đã bỏ các thanh này khỏi đầu ra không giao diện),
+   ứng dụng chuyển sang điều khiển màn hình `/usage` tương tác qua một pseudo-terminal, đọc
+   các thanh đã hiển thị, rồi thoát trước khi bắt đầu bất kỳ lượt hội thoại nào — nên không
+   có gì được lưu xuống đĩa và số liệu sử dụng của bạn không bị ảnh hưởng.
+
+Việc lấy dữ liệu được giới hạn một luồng (không bao giờ có hai tiến trình `claude` cùng lúc),
+và khi endpoint sử dụng bị giới hạn tần suất thì được coi là tạm hoãn (back-off), không phải lỗi.
 
 Không cần truy cập Keychain. Ứng dụng không đụng đến thông tin đăng nhập của bạn.
 
@@ -87,5 +96,5 @@ menu (nhấp vào chỉ báo → Launch at Login).
 ./ClaudeUsageStats.app/Contents/MacOS/ClaudeUsageStats --screenshot screenshot.png
 ```
 
-Việc làm mới chạy mỗi 120 giây và mỗi khi bạn mở menu. Phần chân của bảng hiển thị
-thời điểm dữ liệu được cập nhật lần cuối.
+Việc làm mới chạy mỗi 5 phút và mỗi khi bạn mở menu, và giãn dần khi gặp lỗi liên tiếp.
+Phần chân của bảng hiển thị thời điểm dữ liệu được cập nhật lần cuối.

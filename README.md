@@ -39,11 +39,20 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 
 ## How it works
 
-The app fetches your usage limits directly from the local `claude` CLI tool:
+The app fetches your usage limits from the local `claude` CLI tool, cheapest
+source first:
 
-1. Runs the command `claude -p "/usage" < /dev/null` in a login shell (`/bin/zsh -lc`).
-2. Parses the plain-text CLI output to extract percentages, limit names, and reset times.
-3. Renders the extracted info and updates automatically.
+1. Locates `claude` on your interactive login-shell `PATH` (`/bin/zsh -ilc`, so
+   nvm/fnm/volta and custom prefixes resolve).
+2. Runs `claude -p /usage` (headless). If that output already contains the limit
+   bars, it's parsed and rendered — done.
+3. Otherwise (current CLI versions dropped the bars from headless output) it
+   falls back to driving the interactive `/usage` view under a pseudo-terminal,
+   scrapes the rendered bars, and quits before any conversation turn — so
+   nothing is saved to disk and your usage stats aren't affected.
+
+Fetches are single-flighted (never two `claude` processes at once) and a
+throttled usage endpoint is treated as a transient back-off, not an error.
 
 No Keychain access is required. The app doesn't touch your credentials.
 
@@ -83,5 +92,5 @@ Launch at Login).
 ./ClaudeUsageStats.app/Contents/MacOS/ClaudeUsageStats --screenshot screenshot.png
 ```
 
-Refresh runs every 120s and whenever you open the menu. The panel footer shows
-when the data was last updated.
+Refresh runs every 5 minutes and whenever you open the menu, backing off on
+repeated errors. The panel footer shows when the data was last updated.
