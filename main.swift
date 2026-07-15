@@ -30,13 +30,21 @@ if CommandLine.arguments.contains("--selftest") {
                 print("    \(l.resetsAt.map(UsageFormat.reset) ?? "reset unknown")\n")
             }
             print("  Updated \(UsageFormat.ago(s.fetchedAt))")
-            code = 0
+            // A capture short a window means `/usage` was read mid-render. The
+            // app keeps its previous numbers and retries; for a one-shot check
+            // there is nothing to fall back on, so call it what it is.
+            if !s.isComplete {
+                print("\nSELFTEST FAILED: partial capture — \(s.limits.count) window(s), no weekly row")
+            }
+            code = s.isComplete ? 0 : 1
         case .failure(let e):
             print("SELFTEST FAILED: \(e.message)")
         }
         done = true
     }
-    let deadline = Date().addingTimeInterval(20)
+    // Generous: a `-p` miss falls through to the interactive scrape, and the two
+    // capture paths together can run well past the old 20s bound.
+    let deadline = Date().addingTimeInterval(90)
     while !done && Date() < deadline {
         RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.1))
     }

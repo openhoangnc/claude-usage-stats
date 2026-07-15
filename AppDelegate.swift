@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let baseRefreshInterval: TimeInterval = 300    // 5 minutes when healthy
     private let maxRefreshInterval: TimeInterval = 1800    // cap for repeated transient failures
     private let authFailRefreshInterval: TimeInterval = 900 // signed-out: only re-login recovers, so wait
+    private let partialRefreshInterval: TimeInterval = 60   // caught /usage mid-render: settles on its own
     private var currentRefreshInterval: TimeInterval = 300
 
     private var lastRefreshAt: Date?
@@ -23,6 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let launchedAt = Date()
     private var lastSuccessAt: Date?
+    /// When we last captured *every* window. Distinct from `lastSuccessAt`: it's
+    /// how we tell a momentary mid-render partial from a `/usage` format change.
+    private var lastCompleteAt: Date?
     private let staleThreshold: TimeInterval = 420   // warn if no fresh usage for 7 minutes
 
     private var lastSnapshot: UsageSnapshot?
@@ -116,10 +120,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         client.fetch { [weak self] result in
             guard let self = self else { return }
             switch result {
+            case .success(let snapshot) where !snapshot.isComplete:
+                // `/usage` renders progressively, so this parsed cleanly but came
+                // back short a window. Don't let it replace numbers we already
+                // trust — dropping the weekly row from a panel that had one is
+                // the bug this guards — and retry soon, since a mid-render
+                // partial clears on the very next poll.
+                self.lastError = nil
+                let sinceComplete = Date().timeIntervalSince(self.lastCompleteAt ?? self.launchedAt)
+                let raceIsLikely = sinceComplete < self.staleThreshold
+                if !raceIsLikely || self.lastSnapshot?.isComplete != true {
+                    // Either there's nothing better on screen, or partials have
+                    // outlasted the staleness window — past which this isn't a
+                    // render race but a CLI whose format changed (it has before).
+                    // Take what we can get rather than freezing on old numbers.
+                    self.lastSnapshot = snapshot
+                    self.lastSuccessAt = snapshot.fetchedAt
+                }
+                NSLog("ClaudeUsageStats:partial usage — \(snapshot.limits.count) window(s), no weekly row")
+                let retry = raceIsLikely ? self.partialRefreshInterval : self.baseRefreshInterval
+                if self.currentRefreshInterval != retry {
+                    self.startTimer(interval: retry)
+                }
+
             case .success(let snapshot):
                 self.lastSnapshot = snapshot
                 self.lastError = nil
                 self.lastSuccessAt = snapshot.fetchedAt
+                self.lastCompleteAt = snapshot.fetchedAt
                 if self.currentRefreshInterval != self.baseRefreshInterval {
                     self.startTimer(interval: self.baseRefreshInterval)
                 }

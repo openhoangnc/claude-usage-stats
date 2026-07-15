@@ -19,6 +19,15 @@ struct UsageSnapshot {
 
     var session: UsageLimit?   { limits.first { $0.kind == "session" } }
     var weeklyAll: UsageLimit? { limits.first { $0.kind == "weekly_all" } }
+
+    /// True once every window the menu bar and panel show has been captured.
+    ///
+    /// `/usage` renders progressively — the session bar is drawn from local
+    /// state, while the weekly rows wait on the usage endpoint — so a capture
+    /// taken too early parses perfectly but is simply missing windows. Callers
+    /// must not treat such a snapshot as a result: it is indistinguishable from
+    /// a real one downstream, which is how the weekly row went missing.
+    var isComplete: Bool { session != nil && weeklyAll != nil }
 }
 
 enum UsageError: Error {
@@ -78,6 +87,11 @@ final class UsageClient {
     /// to refresh (and rotate) the shared OAuth token.
     private let processTimeout: TimeInterval = 40
 
+    /// How long the TUI must stop painting before a capture is judged finished.
+    /// The panel repaints as the usage endpoint refines its numbers, so reading
+    /// it too eagerly catches a half-drawn frame.
+    private let settleTime: TimeInterval = 1.5
+
     /// The interactive TUI is launched trimmed down: no user MCP servers, no
     /// Chrome bridge, no auto-update or non-essential model calls, and kept out
     /// of usage attribution — so a poll is fast and side-effect-free.
@@ -131,7 +145,8 @@ final class UsageClient {
         // 1. Headless `claude -p /usage`. Cheap and doesn't touch the
         //    rate-limited usage endpoint. Works whenever `-p` includes the bars.
         let printOut = capturePrintUsage(claude: claude, path: path)
-        if let snapshot = Self.parseCLIOutput(printOut) {
+        let printSnapshot = Self.parseCLIOutput(printOut)
+        if let snapshot = printSnapshot, snapshot.isComplete {
             return .success(snapshot)
         }
         if printOut.contains("command not found") {
@@ -141,18 +156,30 @@ final class UsageClient {
             return .failure(.noCredentials)
         }
 
-        // 2. Interactive fallback: scrape the bars from the TUI.
+        // 2. Interactive fallback: scrape the bars from the TUI. Also reached
+        //    when `-p` parsed but came back short a window, since the TUI may
+        //    still render the rest.
         switch driveInteractiveUsage(claude: claude, path: path) {
         case .launchFailed:
-            return .failure(.network("Couldn’t launch the Claude CLI"))
+            return printSnapshot.map { .success($0) }
+                ?? .failure(.network("Couldn’t launch the Claude CLI"))
         case .rateLimited:
             // Transient: keep the last good numbers and back off, don't alarm.
             return .failure(.network("Usage endpoint is rate limited — retrying"))
         case .captured(let output):
-            if let snapshot = Self.parseCLIOutput(output) {
+            let tuiSnapshot = Self.parseCLIOutput(output)
+            if let snapshot = tuiSnapshot, snapshot.isComplete {
                 return .success(snapshot)
             }
-            // No bars. A login/onboarding screen is a real auth problem;
+            // Neither source rendered every window. Ship whichever saw more —
+            // it may genuinely be all this account has — but it carries
+            // `isComplete == false`, so the caller keeps numbers it already
+            // trusts instead of dropping a window from the panel.
+            let partials = [printSnapshot, tuiSnapshot].compactMap { $0 }
+            if let best = partials.max(by: { $0.limits.count < $1.limits.count }) {
+                return .success(best)
+            }
+            // No bars at all. A login/onboarding screen is a real auth problem;
             // anything else is a format/parse issue — which must NOT suggest
             // `claude /login` (doing so made users re-authenticate needlessly).
             if Self.isAuthError(output) {
@@ -239,6 +266,7 @@ final class UsageClient {
         var usageAt: Date?
         var handledTrust = false
         var rateLimited = false
+        var lastParsedCount = -1   // re-parse for completeness only when new bytes arrive
         let cap = 65536
         let readBuf = UnsafeMutableRawPointer.allocate(byteCount: cap, alignment: 1)
         defer { readBuf.deallocate() }
@@ -288,9 +316,21 @@ final class UsageClient {
                     rateLimited = true
                     break
                 }
-                // Done once both the session and a weekly bar have rendered.
-                let resets = text.components(separatedBy: "Resets").count - 1
-                if resets >= 2 && quiet > 0.6 { break }
+                // Done once every window has rendered *and* the screen has gone
+                // quiet. Counting "Resets" over the cumulative buffer counted
+                // the same block twice across repaints, so a session bar that
+                // repainted before the weekly rows arrived ended the capture
+                // early — leaving the session-only, reset-less panel this
+                // replaces. Parsing is the same completeness test the result is
+                // judged by, and it merges frames, so repaints can't fool it.
+                //
+                // Settling matters beyond that: the scoped row ("Current week
+                // (Fable)") paints last and carries no reset line of its own, so
+                // breaking the instant the weekly row lands can still clip it.
+                if quiet > settleTime && buf.count != lastParsedCount {
+                    lastParsedCount = buf.count
+                    if Self.parseCLIOutput(text)?.isComplete == true { break }
+                }
                 if let u = usageAt, now.timeIntervalSince(u) > 14 { break }   // gave up waiting
             }
         }
@@ -392,8 +432,12 @@ final class UsageClient {
 
             if let percent = percent {
                 let severity = percent >= 90 ? "critical" : (percent >= 75 ? "warning" : "normal")
+                // Keep the freshest percent, but a repaint that hasn't drawn its
+                // reset line yet must not erase a reset we already scraped —
+                // that's what left the panel saying "Reset time unknown".
                 let limit = UsageLimit(kind: kindForTitle(title), title: title,
-                                       percent: percent, severity: severity, resetsAt: resetsAt)
+                                       percent: percent, severity: severity,
+                                       resetsAt: resetsAt ?? byTitle[title]?.resetsAt)
                 if byTitle[title] == nil { order.append(title) }
                 byTitle[title] = limit
                 i = max(j, i + 1)
@@ -433,9 +477,12 @@ final class UsageClient {
     }
 
     /// The canonical title if `line` is a usage-window header, else `nil`.
-    /// Guards on length so prose merely containing the words isn't matched.
+    /// Guards on length so prose merely containing the words isn't matched, and
+    /// on `%` because a block header carries the title alone — a line like
+    /// `"Current week (Fable): 0% used"` is a *legacy row*, and matching it here
+    /// made `parseBlocks` claim the output and swallow the session row with it.
     private static func titleForLine(_ line: String) -> String? {
-        guard line.count <= 40 else { return nil }
+        guard line.count <= 40, !line.contains("%") else { return nil }
         let low = line.lowercased()
         if low.hasPrefix("current session") { return "Current session" }
         if low.hasPrefix("current week")    { return line }   // keep "(all models)"/"(Fable)"
