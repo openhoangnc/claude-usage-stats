@@ -12,6 +12,30 @@ struct UsageLimit {
     let resetsAt: Date?
 }
 
+extension UsageLimit {
+    /// How long this limit's window runs for.
+    ///
+    /// `/usage` reports only when a window resets, never when it opened, so the
+    /// start has to be inferred as `resetsAt - windowLength`. These lengths are
+    /// therefore an assumption about the plan, not a reading from the CLI: if a
+    /// window's duration ever changes, the elapsed marker drifts silently.
+    var windowLength: TimeInterval? {
+        switch kind {
+        case "session":                    return 5 * 3600
+        case "weekly_all", "weekly_scoped": return 7 * 24 * 3600
+        default:                           return nil
+        }
+    }
+
+    /// Fraction of the window already elapsed (0...1), or nil when it can't be
+    /// derived. Clamped, since a stale `resetsAt` can sit outside the window.
+    func elapsedFraction(now: Date = Date()) -> Double? {
+        guard let resetsAt, let length = windowLength, length > 0 else { return nil }
+        let remaining = resetsAt.timeIntervalSince(now)
+        return min(max(1 - remaining / length, 0), 1)
+    }
+}
+
 /// A full snapshot of usage at a point in time.
 struct UsageSnapshot {
     let limits: [UsageLimit]        // in display order (session, weekly_all, weekly_scoped)

@@ -11,6 +11,12 @@ same numbers as the `claude /usage` command, always visible.
   and your active model's weekly limit), each with a progress bar and a reset
   line showing the local time and how long until reset.
 
+Each progress bar carries a **pace marker** — a small tick at the point the
+window's clock has reached. Fill behind the tick means you're spending slower
+than the window elapses; fill past it means you're on track to run out early.
+(A window that hasn't been used yet has no reset time, so it shows neither a
+marker nor a reset line.)
+
 ![Claude Usage Stats screenshot](screenshot.png)
 
 The two percentages are **auto-colored by usage range**, using colors verified

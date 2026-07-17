@@ -12,6 +12,12 @@ ngay trong tầm mắt — cùng những con số như lệnh `claude /usage`, l
   tiến trình và một dòng đặt lại (reset) hiển thị giờ địa phương cùng thời gian
   còn lại đến khi đặt lại.
 
+Mỗi thanh tiến trình có thêm một **vạch nhịp độ** — một vạch nhỏ đánh dấu vị trí
+mà đồng hồ của khung thời gian đã chạy tới. Phần tô nằm sau vạch nghĩa là bạn
+đang dùng chậm hơn so với thời gian trôi qua; vượt qua vạch nghĩa là bạn có khả
+năng dùng hết trước khi khung được đặt lại. (Khung chưa được dùng đến thì không
+có thời gian đặt lại, nên không hiện vạch lẫn dòng đặt lại.)
+
 ![Ảnh chụp màn hình Claude Usage Stats](screenshot.png)
 
 Hai tỷ lệ phần trăm được **tự động tô màu theo khoảng mức sử dụng**, dùng các màu

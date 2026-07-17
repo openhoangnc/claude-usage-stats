@@ -16,6 +16,8 @@ final class UsagePanelView: NSView {
     private let barHeight: CGFloat = 8
     private let pctColWidth: CGFloat = 64      // "100% used"
     private let barGap: CGFloat = 8            // bar -> pct label
+    private let markerWidth: CGFloat = 2
+    private let markerOverhang: CGFloat = 2    // marker protrudes past the bar, top and bottom
 
     // Row metrics
     private let titleH: CGFloat = 18
@@ -59,8 +61,9 @@ final class UsagePanelView: NSView {
             return padTop + 20 + padBottom
         }
         var h = padTop
-        for i in 0..<limits.count {
-            h += titleH + titleToBar + barHeight + barToReset + resetH
+        for (i, limit) in limits.enumerated() {
+            h += titleH + titleToBar + barHeight
+            if resetLine(for: limit) != nil { h += barToReset + resetH }
             if i != limits.count - 1 { h += rowGap }
         }
         h += footerGap + footerH + padBottom
@@ -93,16 +96,24 @@ final class UsagePanelView: NSView {
                 fillRounded(fill, radius: barHeight / 2, color: fillColor(for: limit))
             }
 
+            // Where the fill would sit if the window were being spent evenly, so
+            // that fill-vs-marker reads at a glance as ahead of / behind pace.
+            if let elapsed = limit.elapsedFraction() {
+                drawTimeMarker(fraction: CGFloat(elapsed), in: track)
+            }
+
             // "NN% used" beside the bar, vertically centred with it
             drawText("\(limit.percent)% used",
                      at: NSPoint(x: padX + barMaxW + barGap, y: y - 3),
                      font: pctFont, color: .labelColor)
-            y += barHeight + barToReset
+            y += barHeight
 
-            // Reset line
-            let resetStr = limit.resetsAt.map(UsageFormat.reset) ?? "Reset time unknown"
-            drawText(resetStr, at: NSPoint(x: padX, y: y), font: resetFont, color: .secondaryLabelColor)
-            y += resetH
+            // Reset line, omitted entirely when there's no reset time to show.
+            if let resetStr = resetLine(for: limit) {
+                y += barToReset
+                drawText(resetStr, at: NSPoint(x: padX, y: y), font: resetFont, color: .secondaryLabelColor)
+                y += resetH
+            }
 
             if i != limits.count - 1 { y += rowGap }
         }
@@ -110,6 +121,14 @@ final class UsagePanelView: NSView {
         // Footer
         y += footerGap
         drawText(footerString(), at: NSPoint(x: padX, y: y), font: footerFont, color: .tertiaryLabelColor)
+    }
+
+    /// The reset line for a limit, or nil when there is nothing truthful to say.
+    /// A window that hasn't been drawn on yet has no reset time — the clock only
+    /// starts on first use — so the row drops the line rather than claiming the
+    /// time is "unknown", which reads as a failure to fetch it.
+    private func resetLine(for limit: UsageLimit) -> String? {
+        limit.resetsAt.map(UsageFormat.reset)
     }
 
     private func footerString() -> String {
@@ -142,6 +161,21 @@ final class UsagePanelView: NSView {
             .foregroundColor: color,
             .paragraphStyle: paragraphStyle
         ]).draw(in: rect)
+    }
+
+    /// Vertical pace marker at `fraction` along the bar.
+    private func drawTimeMarker(fraction: CGFloat, in track: NSRect) {
+        // Inset by half a marker so 0% and 100% still land inside the bar.
+        let centerX = track.minX + markerWidth / 2 + (track.width - markerWidth) * fraction
+        let rect = NSRect(x: centerX - markerWidth / 2,
+                          y: track.minY - markerOverhang,
+                          width: markerWidth,
+                          height: track.height + markerOverhang * 2)
+        // The marker crosses the track and the fill, and either one can be close
+        // in luminance to it — dark fills in light mode, bright fills in dark.
+        // A background-colored halo keeps it readable over whatever it lands on.
+        fillRounded(rect.insetBy(dx: -1, dy: -1), radius: 2, color: .textBackgroundColor)
+        fillRounded(rect, radius: markerWidth / 2, color: .labelColor)
     }
 
     private func fillRounded(_ rect: NSRect, radius: CGFloat, color: NSColor) {
