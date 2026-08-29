@@ -22,6 +22,18 @@ on:
 
 jobs:
   build-and-release:
+    # Releases are opt-in: a push must carry `[deploy-prod]` (main) or `[deploy]`
+    # (any other branch) in one of its commit messages.
+    #
+    # ⚠️ TAG PUSHES STAY UNGATED. `refs/tags/v*` is itself the explicit release
+    # trigger, and a tag push carries no `commits` payload to read a marker out of —
+    # gating it would make tagging a release silently do nothing.
+    # `workflow_dispatch` always runs.
+    if: >-
+      github.event_name != 'push'
+      || startsWith(github.ref, 'refs/tags/')
+      || (github.ref_name == 'main' && contains(join(github.event.commits.*.message), '[deploy-prod]'))
+      || (github.ref_name != 'main' && contains(join(github.event.commits.*.message), '[deploy]'))
     runs-on: macos-latest
     permissions:
       contents: write
