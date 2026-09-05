@@ -56,13 +56,13 @@ struct UsageSnapshot {
 
 enum UsageError: Error {
     case claudeCliNotInstalled
+    /// Also covers a `/usage` we simply couldn't read: when neither the
+    /// headless nor the interactive capture yields a single limit row, the
+    /// overwhelmingly common cause is a CLI sitting on a login/onboarding
+    /// screen whose wording `isAuthError` doesn't happen to match, so the app
+    /// asks for a sign-in rather than reporting an unactionable parse failure.
     case noCredentials
     case sessionExpired
-    /// The CLI ran and authenticated fine, but its `/usage` output didn't
-    /// contain limit rows we could parse — typically because a CLI update
-    /// changed the output format. This is NOT an auth problem, so it must never
-    /// prompt a re-login (doing so is what made users log in needlessly).
-    case unreadableUsage(String)
     case network(String)
 
     var message: String {
@@ -70,7 +70,6 @@ enum UsageError: Error {
         case .claudeCliNotInstalled: return "Claude CLI not found — run: npm i -g @anthropic-ai/claude-code"
         case .noCredentials:         return "Not signed in — run: claude /login"
         case .sessionExpired:        return "Session may have expired — run: claude /login"
-        case .unreadableUsage:       return "Couldn’t read usage — the Claude CLI’s /usage format may have changed"
         case .network(let m):        return m
         }
     }
@@ -81,7 +80,7 @@ enum UsageError: Error {
         switch self {
         case .claudeCliNotInstalled:            return "npm i -g @anthropic-ai/claude-code"
         case .noCredentials, .sessionExpired:   return "claude /login"
-        case .unreadableUsage, .network:        return nil
+        case .network:                          return nil
         }
     }
 }
@@ -203,13 +202,14 @@ final class UsageClient {
             if let best = partials.max(by: { $0.limits.count < $1.limits.count }) {
                 return .success(best)
             }
-            // No bars at all. A login/onboarding screen is a real auth problem;
-            // anything else is a format/parse issue — which must NOT suggest
-            // `claude /login` (doing so made users re-authenticate needlessly).
-            if Self.isAuthError(output) {
-                return .failure(.noCredentials)
-            }
-            return .failure(.unreadableUsage(""))
+            // No bars at all, from either source. Treat every such capture as
+            // "sign in required": a CLI parked on a login/onboarding screen is
+            // by far the likeliest reason both captures came back bare, and its
+            // wording changes often enough that `isAuthError` can't be trusted
+            // to recognise it. `claude /login` is then the one actionable fix
+            // we can offer — a bare "couldn't read usage" leaves the user with
+            // nothing to do.
+            return .failure(.noCredentials)
         }
     }
 

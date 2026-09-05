@@ -175,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch error {
         case .noCredentials, .sessionExpired:
             next = authFailRefreshInterval
-        case .claudeCliNotInstalled, .unreadableUsage, .network:
+        case .claudeCliNotInstalled, .network:
             next = min(currentRefreshInterval * 2, maxRefreshInterval)
         }
         if next != currentRefreshInterval {
