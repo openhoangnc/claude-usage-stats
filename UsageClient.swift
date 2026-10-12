@@ -44,6 +44,14 @@ struct UsageSnapshot {
     var session: UsageLimit?   { limits.first { $0.kind == "session" } }
     var weeklyAll: UsageLimit? { limits.first { $0.kind == "weekly_all" } }
 
+    /// The weekly window the menu bar shows as its second number. Not every
+    /// plan has an all-models weekly cap — some carry only a model-scoped one
+    /// ("Current week (Fable)") — so fall back to the first weekly row of any
+    /// kind. `nil` means the account has a session limit only.
+    var weekly: UsageLimit? {
+        weeklyAll ?? limits.first { $0.kind.hasPrefix("weekly") }
+    }
+
     /// True once every window the menu bar and panel show has been captured.
     ///
     /// `/usage` renders progressively — the session bar is drawn from local
@@ -51,7 +59,13 @@ struct UsageSnapshot {
     /// taken too early parses perfectly but is simply missing windows. Callers
     /// must not treat such a snapshot as a result: it is indistinguishable from
     /// a real one downstream, which is how the weekly row went missing.
-    var isComplete: Bool { session != nil && weeklyAll != nil }
+    ///
+    /// Any weekly row counts, not just "(all models)": accounts without an
+    /// all-models cap would otherwise never complete, and every poll would run
+    /// the slow interactive scrape to its timeout. A session-only account still
+    /// never completes; `AppDelegate` accepts its partials once they outlast
+    /// the render-race window.
+    var isComplete: Bool { session != nil && weekly != nil }
 }
 
 enum UsageError: Error {

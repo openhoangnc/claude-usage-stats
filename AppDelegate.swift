@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if !self.loggedFirstResult {
                     self.loggedFirstResult = true
                     let s = snapshot.session?.percent ?? -1
-                    let w = snapshot.weeklyAll?.percent ?? -1
+                    let w = snapshot.weekly?.percent ?? -1
                     NSLog("ClaudeUsageStats:fetched OK — session=\(s)%% week=\(w)%% (\(snapshot.limits.count) windows)")
                 }
             case .failure(let error):
@@ -195,14 +195,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyState() {
         statusView.update(session: lastSnapshot?.session,
-                          weekly: lastSnapshot?.weeklyAll,
+                          weekly: lastSnapshot?.weekly,
                           stale: usageIsStale)
         panelView.render(snapshot: lastSnapshot, error: lastError?.message)
 
         if let snapshot = lastSnapshot {
             let s = snapshot.session.map { "\($0.percent)%" } ?? "–"
-            let w = snapshot.weeklyAll.map { "\($0.percent)%" } ?? "–"
-            statusItem.button?.toolTip = "Claude Usage Stats — Session \(s) · Week \(w)"
+            var tip = "Claude Usage Stats — Session \(s)"
+            if let w = snapshot.weekly { tip += " · \(w.title) \(w.percent)%" }
+            statusItem.button?.toolTip = tip
         } else {
             statusItem.button?.toolTip = lastError?.message ?? "Claude Usage Stats"
         }

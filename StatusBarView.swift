@@ -1,6 +1,8 @@
 import AppKit
 
-/// Two-line menu-bar view: session % on top, weekly (all models) % below.
+/// Two-line menu-bar view: session % on top, weekly % below (all models, or a
+/// model-scoped week when the plan has no all-models cap). An account with a
+/// session limit only gets a single, larger session % centred vertically.
 /// The percentages are auto-colored by usage range (see `UsageColors`).
 final class StatusBarView: NSView {
 
@@ -20,6 +22,7 @@ final class StatusBarView: NSView {
     private static let warnColWidth: CGFloat = 10
 
     private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .bold)
+    private static let singleFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
     private static let warnFont = NSFont.systemFont(ofSize: 13, weight: .bold)
 
     private static let rightAlign: NSParagraphStyle = {
@@ -35,6 +38,11 @@ final class StatusBarView: NSView {
     private var cachedSessionString: NSAttributedString?
     private var cachedWeekString: NSAttributedString?
 
+    /// Session known, no weekly window at all: the account has a session limit
+    /// only. Before the first fetch both are nil, so the two-line "··"
+    /// placeholders still show while loading.
+    private var isSingleLine: Bool { sessionPct != nil && weekPct == nil }
+
     // MARK: Data
 
     func update(session: UsageLimit?, weekly: UsageLimit?, stale: Bool) {
@@ -47,10 +55,10 @@ final class StatusBarView: NSView {
         needsDisplay = true
     }
 
-    private func createLine(_ pct: Int?) -> NSAttributedString {
+    private func createLine(_ pct: Int?, font: NSFont = valueFont) -> NSAttributedString {
         if let pct = pct {
             return NSAttributedString(string: "\(pct)%", attributes: [
-                .font: Self.valueFont,
+                .font: font,
                 .foregroundColor: UsageColors.color(percent: pct, isDark: isDarkAppearance),
                 .paragraphStyle: Self.rightAlign,
             ])
@@ -75,13 +83,15 @@ final class StatusBarView: NSView {
     private func updateCachedStringsIfNeeded() {
         if cachedSessionString == nil || cachedWeekString == nil || cachedAppearance != effectiveAppearance {
             cachedAppearance = effectiveAppearance
-            cachedSessionString = createLine(sessionPct)
+            cachedSessionString = createLine(sessionPct, font: isSingleLine ? Self.singleFont : Self.valueFont)
             cachedWeekString = createLine(weekPct)
         }
     }
 
     private func recomputeWidth() {
-        let textW = max(getSessionString().size().width, getWeekString().size().width)
+        let textW = isSingleLine
+            ? getSessionString().size().width
+            : max(getSessionString().size().width, getWeekString().size().width)
         var newWidth = max(22, ceil(textW))
         if isStale { newWidth += Self.warnColWidth }
         if abs(newWidth - preferredWidth) > 0.5 {
@@ -95,6 +105,13 @@ final class StatusBarView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let textX: CGFloat = isStale ? Self.warnColWidth : 0
         let textW = bounds.width - textX
+        if isSingleLine {
+            let line = getSessionString()
+            let h = ceil(line.size().height)
+            line.draw(in: NSRect(x: textX, y: (bounds.height - h) / 2, width: textW, height: h))
+            if isStale { drawWarningMark() }
+            return
+        }
         getSessionString().draw(in: NSRect(x: textX, y: 11, width: textW, height: 11))
         getWeekString().draw(in: NSRect(x: textX, y: 1,  width: textW, height: 11))
 

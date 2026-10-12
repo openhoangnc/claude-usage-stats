@@ -27,7 +27,7 @@ enum ScreenshotMaker {
 
         let status = StatusBarView(frame: NSRect(x: 0, y: 0, width: 40, height: 22))
         status.appearance = dark
-        status.update(session: snapshot.session, weekly: snapshot.weeklyAll, stale: false)
+        status.update(session: snapshot.session, weekly: snapshot.weekly, stale: false)
         let sw = status.preferredWidth
 
         let panel = UsagePanelView()

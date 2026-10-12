@@ -21,7 +21,7 @@ if CommandLine.arguments.contains("--selftest") {
         switch result {
         case .success(let s):
             let sv = s.session.map { "\($0.percent)%" } ?? "··"
-            let wv = s.weeklyAll.map { "\($0.percent)%" } ?? "··"
+            let wv = s.weekly.map { "\($0.percent)%" } ?? "··"
             print("MENUBAR   S \(sv)  /  W \(wv)\n")
             print("PANEL (detail):")
             for l in s.limits {
