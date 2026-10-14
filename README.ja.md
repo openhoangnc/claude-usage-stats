@@ -37,6 +37,11 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 バックします。その際は Xcode コマンドラインツールが必要です。）メニューから**ログイン時に
 起動**を有効にできます（インジケーターをクリック → Launch at Login）。
 
+**アップデート**は自動でインストールされます。アプリは 1 日 1 回 GitHub Releases を確認し、
+新しいバージョンがあればダウンロードしてチェックサムを検証し、自身を置き換えて再起動します。
+メニューの **Install Updates Automatically** でオフにでき、**Check for Updates…** で手動
+確認もできます。ソースからビルドしたコピーは自動では更新されません。
+
 ## アンインストール
 
 ```bash

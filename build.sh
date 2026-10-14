@@ -14,7 +14,7 @@ DEPLOYMENT_TARGET="11.0"
 echo "=== Building ${APP_NAME} ==="
 
 SOURCES=(PathResolver.swift UsageClient.swift UsageColors.swift StatusBarView.swift \
-    UsagePanelView.swift Screenshot.swift AppDelegate.swift main.swift)
+    UsagePanelView.swift Screenshot.swift Updater.swift AppDelegate.swift main.swift)
 COMMON_FLAGS=(-Osize -wmo -module-name "${APP_NAME}" -Xlinker -dead_strip \
     -framework AppKit -framework Foundation -framework Security -framework ServiceManagement)
 

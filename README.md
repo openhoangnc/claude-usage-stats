@@ -37,6 +37,12 @@ launches it — no Xcode needed. (If no release is available yet, it falls back 
 building from source, which needs the Xcode command-line tools.) Enable **Launch
 at Login** from the menu (click the indicator → Launch at Login).
 
+**Updates** install themselves: once a day the app checks GitHub Releases and,
+when a newer version is out, downloads it, verifies its checksum, replaces
+itself and relaunches. Turn this off with **Install Updates Automatically** in
+the menu, or check by hand with **Check for Updates…**. Copies built from source
+never update on their own.
+
 ## Uninstall
 
 ```bash

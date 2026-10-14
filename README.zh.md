@@ -34,6 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 版本，则会回退到从源码构建，这需要 Xcode 命令行工具。）在菜单中启用**开机自启动**
 （点击指示器 → Launch at Login）。
 
+**更新**会自动安装：应用每天检查一次 GitHub Releases，发现新版本时下载、校验
+checksum、替换自身并重新启动。可在菜单中通过 **Install Updates Automatically** 关闭，
+或用 **Check for Updates…** 手动检查。从源码构建的副本不会自动更新。
+
 ## 卸载
 
 ```bash

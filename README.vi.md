@@ -39,6 +39,11 @@ cần Xcode. (Nếu chưa có bản phát hành nào, nó sẽ chuyển sang d�
 việc này cần Xcode command-line tools.) Bật **Launch at Login** (khởi chạy khi
 đăng nhập) từ menu (nhấp vào chỉ báo → Launch at Login).
 
+**Bản cập nhật** tự cài đặt: mỗi ngày một lần ứng dụng kiểm tra GitHub Releases và,
+khi có phiên bản mới, tải về, xác minh checksum, tự thay thế và khởi chạy lại. Tắt
+tính năng này bằng **Install Updates Automatically** trong menu, hoặc kiểm tra thủ
+công bằng **Check for Updates…**. Bản dựng từ mã nguồn không bao giờ tự cập nhật.
+
 ## Gỡ cài đặt
 
 ```bash

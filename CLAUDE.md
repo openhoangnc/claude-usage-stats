@@ -49,3 +49,22 @@ fast-forward `main` from `dev` with byte-identical commits, so a shared token re
 every promotion. The condition is kept identical across all eleven repos in `~/priv` so there is one
 rule to remember. Full reasoning: `~/priv/shopify-order-printer/docs/implementation-log.md` D-208
 and D-210.
+
+## In-app updater (`Updater.swift`, 2026-10-14)
+
+The app updates itself from GitHub Releases: daily it reads `releases/latest`, compares the tag
+with `CFBundleShortVersionString`, downloads the **`ClaudeUsageStats.zip`** asset, checks it
+against the asset's GitHub `digest` (sha256), unpacks it with `ditto`, verifies bundle id, version
+and `codesign --verify`, swaps the bundle with `FileManager.replaceItemAt`, and relaunches. It
+waits for any in-flight `claude` fetch to finish before quitting (same OAuth-race reason as the
+fetch single-flighting).
+
+The release pipeline is part of this contract:
+
+- **The asset name `ClaudeUsageStats.zip` and the `v<semver>` tag format are load-bearing** —
+  rename either and every installed copy stops updating, silently.
+- **`CUSReleaseBuild` (bool, added to Info.plist by `release.yml`) is what turns automatic checks
+  on.** Local `./build.sh` builds stamp version 1.0.0 and lack the key, so they never replace
+  themselves with the release. "Check for Updates…" still works on them and asks first.
+- A release whose zip doesn't contain a `ClaudeUsageStats.app` at the top level, or whose
+  Info.plist version differs from the tag, is refused by the updater.

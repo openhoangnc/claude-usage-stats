@@ -90,6 +90,9 @@ jobs:
           echo "Updating Info.plist to version ${VERSION}..."
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" Info.plist
+          # Turns on the in-app updater's automatic checks (Updater.swift). Local
+          # builds lack it, so they never replace themselves with the release.
+          /usr/libexec/PlistBuddy -c "Add :CUSReleaseBuild bool true" Info.plist
 
       - name: Build macOS Application
         run: |

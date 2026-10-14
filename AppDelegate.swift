@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let panelView = UsagePanelView()
 
     private let client = UsageClient()
+    private let updater = Updater()
     private var timer: Timer?
     // Usage changes slowly and opening the menu always refreshes on demand, so
     // the background timer can be gentle. Every `claude -p /usage` spawn is a
@@ -53,6 +54,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enableLaunchAtLoginOnFirstRun()
         startTimer(interval: baseRefreshInterval)
         refresh()
+        setupUpdater()
+    }
+
+    private func setupUpdater() {
+        // Don't quit under a running `claude`: killing it mid token-refresh is the
+        // exact OAuth race the fetch single-flighting exists to avoid.
+        updater.whenSafeToQuit = { [weak self] quit in
+            guard let self = self else { return quit() }
+            self.timer?.invalidate()
+            let deadline = Date().addingTimeInterval(120)
+            func poll() {
+                if !self.client.isBusy || Date() > deadline { return quit() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: poll)
+            }
+            poll()
+        }
+        updater.start()
     }
 
     /// True if another copy of this app (same bundle id) is already running.
@@ -248,6 +266,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launch.state = isLaunchAtLoginEnabled ? .on : .off
         menu.addItem(launch)
 
+        if let release = updater.pendingRelease {
+            let install = NSMenuItem(title: "Install Update \(release.version)…",
+                                     action: updater.isBusy ? nil : #selector(installUpdate),
+                                     keyEquivalent: "")
+            install.target = self
+            menu.addItem(install)
+        }
+        let check = NSMenuItem(title: updater.isBusy ? "Checking for Updates…" : "Check for Updates…",
+                               action: updater.isBusy ? nil : #selector(checkForUpdates),
+                               keyEquivalent: "")
+        check.target = self
+        menu.addItem(check)
+        if updater.isReleaseBuild {
+            let auto = NSMenuItem(title: "Install Updates Automatically",
+                                  action: #selector(toggleAutoUpdate), keyEquivalent: "")
+            auto.target = self
+            auto.state = updater.autoInstall ? .on : .off
+            menu.addItem(auto)
+        }
+
         let github = NSMenuItem(title: "GitHub Repository", action: #selector(openGitHub), keyEquivalent: "")
         github.target = self
         menu.addItem(github)
@@ -264,6 +302,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit() { NSApplication.shared.terminate(nil) }
+
+    // MARK: Updates
+
+    @objc private func checkForUpdates() { updater.checkNow() }
+    @objc private func installUpdate() { updater.installPending() }
+    @objc private func toggleAutoUpdate(_ sender: NSMenuItem) {
+        updater.autoInstall.toggle()
+        sender.state = updater.autoInstall ? .on : .off
+    }
 
     @objc private func openGitHub() {
         if let url = URL(string: "https://github.com/openhoangnc/claude-usage-stats") {

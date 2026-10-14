@@ -148,6 +148,12 @@ final class UsageClient {
     private var isFetching = false
     private var waiters: [(Result<UsageSnapshot, UsageError>) -> Void] = []
 
+    /// True while a `claude` process is running for a fetch.
+    var isBusy: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return isFetching
+    }
+
     /// Fetch a fresh snapshot. `completion` is always called on the main thread.
     ///
     /// Calls are **coalesced**: if a fetch is already running, this completion
