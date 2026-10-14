@@ -103,8 +103,11 @@ enum UsageError: Error {
 
 /// Fetches usage limits from the local `claude` CLI, cheapest source first:
 ///
-///  1. **`claude -p /usage`** — a fast, headless, side-effect-free call. On CLI
-///     versions that print the limit bars this is all we need.
+///  1. **`claude -p /usage`** — a headless, side-effect-free call. On CLI
+///     versions that print the limit bars this is all we need. 2.1.29x made it
+///     slow (~45s: it scans every local session before printing anything), so
+///     once it overruns `printTimeout` the TUI goes first and headless becomes
+///     the last resort, re-probed daily.
 ///  2. **Interactive fallback** — if `-p` doesn't contain the bars (a 2.x CLI
 ///     change dropped them from headless output), drive the TUI under a
 ///     pseudo-terminal: launch `claude`, send `/usage`, scrape the rendered
@@ -170,7 +173,22 @@ final class UsageClient {
         }
     }
 
-    /// Try the cheap headless path first, then fall back to the interactive TUI.
+    /// How long the headless probe may run before we give up on it this round.
+    private let printTimeout: TimeInterval = 25
+    /// How long headless may run when it is the last resort (the TUI failed).
+    /// `-p /usage` on 2.1.29x prints nothing until it has scanned every local
+    /// session for its "What's contributing…" report — ~45s on a busy machine.
+    private let slowPrintTimeout: TimeInterval = 90
+    /// Re-probe a slow headless path this often, in case a later CLI fixes it.
+    private let headlessReprobeInterval: TimeInterval = 24 * 3600
+
+    /// When headless last ran past `printTimeout`; while set, polls go to the
+    /// TUI first instead of paying that timeout every time. Only touched from
+    /// `runFetch`, which is single-flighted.
+    private var headlessSlowSince: Date?
+
+    /// Headless first while it's fast, else the interactive TUI first; the
+    /// other is the fallback.
     private func runFetch() -> Result<UsageSnapshot, UsageError> {
         // Locate `claude` the way the user's terminal does. If it can't be
         // found the CLI isn't installed (or isn't on any login PATH).
@@ -179,34 +197,65 @@ final class UsageClient {
         }
         let claude = resolution.claude, path = resolution.path
 
-        // 1. Headless `claude -p /usage`. Cheap and doesn't touch the
-        //    rate-limited usage endpoint. Works whenever `-p` includes the bars.
-        let printOut = capturePrintUsage(claude: claude, path: path)
-        let printSnapshot = Self.parseCLIOutput(printOut)
-        if let snapshot = printSnapshot, snapshot.isComplete {
-            return .success(snapshot)
-        }
-        if printOut.contains("command not found") {
-            return .failure(.claudeCliNotInstalled)
-        }
-        if Self.isAuthError(printOut) {
-            return .failure(.noCredentials)
+        var printSnapshot: UsageSnapshot?
+        var triedPrint = false
+
+        /// Headless `claude -p /usage`. Doesn't touch the TUI's rate-limited
+        /// view. Returns a final result, or nil to keep trying other sources.
+        func tryPrint(timeout: TimeInterval) -> Result<UsageSnapshot, UsageError>? {
+            triedPrint = true
+            let started = Date()
+            let printOut = capturePrintUsage(claude: claude, path: path, timeout: timeout)
+            if Date().timeIntervalSince(started) >= printTimeout {
+                if headlessSlowSince == nil { headlessSlowSince = Date() }
+            } else {
+                headlessSlowSince = nil
+            }
+            printSnapshot = Self.parseCLIOutput(printOut)
+            if let snapshot = printSnapshot, snapshot.isComplete {
+                return .success(snapshot)
+            }
+            if printOut.contains("command not found") {
+                return .failure(.claudeCliNotInstalled)
+            }
+            // Rows parsed means we're signed in, whatever the prose around
+            // them happens to contain (skill names, tips…).
+            if printSnapshot == nil && Self.isAuthError(printOut) {
+                return .failure(.noCredentials)
+            }
+            return nil
         }
 
-        // 2. Interactive fallback: scrape the bars from the TUI. Also reached
-        //    when `-p` parsed but came back short a window, since the TUI may
-        //    still render the rest.
+        // 1. Headless, unless it recently proved too slow to be worth the wait.
+        let headlessIsSlow = headlessSlowSince.map {
+            Date().timeIntervalSince($0) < headlessReprobeInterval
+        } ?? false
+        if !headlessIsSlow, let result = tryPrint(timeout: printTimeout) {
+            return result
+        }
+
+        // 2. Interactive: scrape the bars from the TUI. Also reached when `-p`
+        //    parsed but came back short a window, since the TUI may still
+        //    render the rest.
         switch driveInteractiveUsage(claude: claude, path: path) {
         case .launchFailed:
+            if !triedPrint, let result = tryPrint(timeout: slowPrintTimeout) { return result }
             return printSnapshot.map { .success($0) }
                 ?? .failure(.network("Couldn’t launch the Claude CLI"))
         case .rateLimited:
+            if !triedPrint, case .success(let s)? = tryPrint(timeout: slowPrintTimeout), s.isComplete {
+                return .success(s)
+            }
             // Transient: keep the last good numbers and back off, don't alarm.
             return .failure(.network("Usage endpoint is rate limited — retrying"))
         case .captured(let output):
             let tuiSnapshot = Self.parseCLIOutput(output)
             if let snapshot = tuiSnapshot, snapshot.isComplete {
                 return .success(snapshot)
+            }
+            // 3. Headless as the last resort, given the time it now needs.
+            if !triedPrint, let result = tryPrint(timeout: slowPrintTimeout) {
+                return result
             }
             // Neither source rendered every window. Ship whichever saw more —
             // it may genuinely be all this account has — but it carries
@@ -228,8 +277,8 @@ final class UsageClient {
     }
 
     /// Run `claude -p /usage` and return its combined stdout+stderr. Empty on a
-    /// launch failure. Bounded by a timeout so a hung CLI can't block the poll.
-    private func capturePrintUsage(claude: String, path: String) -> String {
+    /// launch failure. Bounded by `timeout` so a hung CLI can't block the poll.
+    private func capturePrintUsage(claude: String, path: String, timeout: TimeInterval) -> String {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: claude)
         task.arguments = ["-p", "/usage"]
@@ -246,7 +295,7 @@ final class UsageClient {
         do { try task.run() } catch { return "" }
 
         let killer = DispatchWorkItem { if task.isRunning { task.terminate() } }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 25, execute: killer)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: killer)
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
@@ -388,12 +437,70 @@ final class UsageClient {
 
     /// Remove ANSI/VT escape sequences and normalise carriage returns so the TUI
     /// capture can be parsed as plain lines.
+    ///
+    /// Cursor *moves* can't simply be deleted: newer CLIs (2.1.29x) draw the gap
+    /// between words with "column N" (`ESC[nG`) or "forward N" (`ESC[nC`)
+    /// instead of literal spaces, so deleting them glued `Current session` into
+    /// `Currentsession` and `Resets Oct 21 at 6am` into `ResetsOct21at6am` —
+    /// neither of which parsed. Horizontal moves become the spaces they stand
+    /// for (tracking the column since the last line break); vertical moves and
+    /// absolute positioning become line breaks, so text from different rows
+    /// never runs together.
     static func stripANSI(_ data: Data) -> String {
-        var t = String(decoding: data, as: UTF8.self)
-        t = t.replacingOccurrences(of: "\u{1b}\\[[0-9;?]*[ -/]*[@-~]", with: "", options: .regularExpression)
-        t = t.replacingOccurrences(of: "\u{1b}\\][^\u{07}\u{1b}]*(\u{07}|\u{1b}\\\\)", with: "", options: .regularExpression)
-        t = t.replacingOccurrences(of: "\u{1b}[=>PMc]", with: "", options: .regularExpression)
-        return t.replacingOccurrences(of: "\r", with: "\n")
+        let s = Array(String(decoding: data, as: UTF8.self).unicodeScalars)
+        var out = String.UnicodeScalarView()
+        var col = 0
+
+        func newline() { out.append("\n"); col = 0 }
+        func pad(_ n: Int) {
+            guard n > 0 else { return }
+            out.append(contentsOf: repeatElement(" ", count: n))
+            col += n
+        }
+
+        var i = 0
+        while i < s.count {
+            let c = s[i]
+            if c == "\u{1b}" {
+                guard i + 1 < s.count else { break }
+                switch s[i + 1] {
+                case "[":
+                    // CSI: parameter bytes, intermediate bytes, one final byte.
+                    var j = i + 2
+                    var params = ""
+                    while j < s.count, (0x30...0x3F).contains(s[j].value) { params.unicodeScalars.append(s[j]); j += 1 }
+                    while j < s.count, (0x20...0x2F).contains(s[j].value) { j += 1 }
+                    guard j < s.count else { i = s.count; continue }
+                    let n = max(Int(params.split(separator: ";").first ?? "") ?? 1, 1)
+                    switch s[j] {
+                    case "C":                       // cursor forward
+                        pad(n)
+                    case "G", "`":                  // cursor to absolute column
+                        if n - 1 >= col { pad(n - 1 - col) } else { newline(); pad(n - 1) }
+                    case "A", "B", "E", "F", "H", "f", "d":
+                        newline()                   // moved to another row
+                    default:
+                        break                       // colours, erase, modes…
+                    }
+                    i = j + 1
+                case "]", "P", "X", "^", "_":
+                    // OSC/DCS/… strings, terminated by BEL or ESC \.
+                    var j = i + 2
+                    while j < s.count {
+                        if s[j] == "\u{07}" { j += 1; break }
+                        if s[j] == "\u{1b}" && j + 1 < s.count && s[j + 1] == "\\" { j += 2; break }
+                        j += 1
+                    }
+                    i = j
+                default:
+                    i += 2                          // two-byte escapes (ESC =, ESC 7, …)
+                }
+                continue
+            }
+            if c == "\r" || c == "\n" { newline() } else { out.append(c); col += 1 }
+            i += 1
+        }
+        return String(out)
     }
 
     /// Deliver `result` to every waiter and clear the in-flight flag so the next
@@ -455,9 +562,12 @@ final class UsageClient {
             // Look at the next few lines for this block's percent and reset.
             var percent: Int? = nil
             var resetsAt: Date? = nil
+            // Blank lines don't count toward the window: how many a repaint
+            // leaves between rows depends on how the TUI moved its cursor.
             var j = i + 1
             var scanned = 0
             while j < lines.count && scanned < 5 {
+                if lines[j].isEmpty { j += 1; continue }
                 if titleForLine(lines[j]) != nil { break }   // next block started
                 if percent == nil { percent = percentUsed(in: lines[j]) }
                 if lines[j].lowercased().hasPrefix("resets") {
@@ -502,12 +612,15 @@ final class UsageClient {
             let title = parts[0].trimmingCharacters(in: .whitespaces)
             guard let _ = titleForLine(title) else { continue }   // only real windows
 
-            let rightParts = parts[1].components(separatedBy: "·")
-            guard let percent = percentUsed(in: rightParts[0]) else { continue }
-            let resetsAt = rightParts.count >= 2 ? parseCLIDate(rightParts[1]) : nil
+            // Find the reset by its word rather than by the `·` separator, so a
+            // different bullet (or none) doesn't drop it.
+            let right = String(parts[1])
+            guard let percent = percentUsed(in: right) else { continue }
+            let resetsAt = right.range(of: "resets", options: .caseInsensitive)
+                .flatMap { parseCLIDate(String(right[$0.lowerBound...])) }
 
             let severity = percent >= 90 ? "critical" : (percent >= 75 ? "warning" : "normal")
-            limits.append(UsageLimit(kind: kindForTitle(title), title: title,
+            limits.append(UsageLimit(kind: kindForTitle(title), title: canonicalTitle(title),
                                      percent: percent, severity: severity, resetsAt: resetsAt))
         }
         guard !limits.isEmpty else { return nil }
@@ -519,19 +632,49 @@ final class UsageClient {
     /// on `%` because a block header carries the title alone — a line like
     /// `"Current week (Fable): 0% used"` is a *legacy row*, and matching it here
     /// made `parseBlocks` claim the output and swallow the session row with it.
+    ///
+    /// Matching ignores whitespace, so a capture whose word gaps were lost
+    /// (`Currentweek(allmodels)`) is still recognised.
     private static func titleForLine(_ line: String) -> String? {
         guard line.count <= 40, !line.contains("%") else { return nil }
-        let low = line.lowercased()
-        if low.hasPrefix("current session") { return "Current session" }
-        if low.hasPrefix("current week")    { return line }   // keep "(all models)"/"(Fable)"
+        let low = squashed(line)
+        if low.hasPrefix("currentsession") { return "Current session" }
+        if low.hasPrefix("currentweek")    { return canonicalTitle(line) }   // keep "(all models)"/"(Fable)"
         return nil
     }
 
+    /// A title with whitespace runs collapsed, and the "Current week" stem
+    /// re-spaced if the capture lost its gaps — it is shown in the panel.
+    private static func canonicalTitle(_ title: String) -> String {
+        let collapsed = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let low = squashed(collapsed)
+        if low.hasPrefix("currentsession") { return "Current session" }
+        guard low.hasPrefix("currentweek"), !collapsed.lowercased().hasPrefix("current week") else {
+            return collapsed
+        }
+        // Drop the stem's letters, keep the qualifier ("(Fable)", "(allmodels)").
+        var rest = Substring(collapsed)
+        var stem = "currentweek"[...]
+        while let c = rest.first, let s = stem.first {
+            if c.isWhitespace { rest = rest.dropFirst(); continue }
+            guard c.lowercased() == String(s) else { break }
+            rest = rest.dropFirst(); stem = stem.dropFirst()
+        }
+        var qualifier = rest.trimmingCharacters(in: .whitespaces)
+        if squashed(qualifier) == "(allmodels)" { qualifier = "(all models)" }
+        return qualifier.isEmpty ? "Current week" : "Current week \(qualifier)"
+    }
+
     private static func kindForTitle(_ title: String) -> String {
-        let low = title.lowercased()
-        if low.contains("session")    { return "session" }
-        if low.contains("all models") { return "weekly_all" }
+        let low = squashed(title)
+        if low.contains("session")   { return "session" }
+        if low.contains("allmodels") { return "weekly_all" }
         return "weekly_scoped"
+    }
+
+    /// Lowercased with all whitespace removed — for spacing-proof comparisons.
+    private static func squashed(_ s: String) -> String {
+        String(s.lowercased().filter { !$0.isWhitespace })
     }
 
     /// The integer N from an `"N% used"` (or `"N%used"`) fragment, else `nil`.
@@ -556,6 +699,14 @@ final class UsageClient {
         if cleaned.lowercased().hasPrefix("resets") {
             cleaned = String(cleaned.dropFirst("resets".count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        // Re-space a capture that lost its gaps ("Oct21at6am", "5:20pm(Asia/…)")
+        // and collapse runs, so the fixed formats below still match.
+        cleaned = cleaned
+            .replacingOccurrences(of: "^([A-Za-z]{3,9})\\s*([0-9]{1,2})\\s*,?\\s*(?:at)?\\s*(?=[0-9])",
+                                  with: "$1 $2 at ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s*\\(", with: " (", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
 
         // Extract timezone if present in parentheses.
         var tz: TimeZone? = nil
@@ -573,7 +724,8 @@ final class UsageClient {
         formatter.timeZone = zone
 
         // Dated form: month/day + time, no year (DateFormatter defaults to 2000).
-        let dated = ["MMM d 'at' h:mma", "MMM d 'at' ha", "MMM d 'at' h:mm a", "MMM d 'at' h a"]
+        let dated = ["MMM d 'at' h:mma", "MMM d 'at' ha", "MMM d 'at' h:mm a", "MMM d 'at' h a",
+                     "MMMM d 'at' h:mma", "MMMM d 'at' ha", "MMM d 'at' HH:mm", "MMMM d 'at' HH:mm"]
         for format in dated {
             formatter.dateFormat = format
             if let date = formatter.date(from: cleaned) {
@@ -582,7 +734,7 @@ final class UsageClient {
         }
 
         // Same-day time-only form: attach today's date (next day if already past).
-        let timeOnly = ["h:mma", "ha", "h:mm a", "h a"]
+        let timeOnly = ["h:mma", "ha", "h:mm a", "h a", "HH:mm"]
         for format in timeOnly {
             formatter.dateFormat = format
             if let date = formatter.date(from: cleaned) {
