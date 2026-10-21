@@ -68,6 +68,11 @@ The release pipeline is part of this contract:
   themselves with the release. "Check for Updates…" still works on them and asks first.
 - A release whose zip doesn't contain a `ClaudeUsageStats.app` at the top level, or whose
   Info.plist version differs from the tag, is refused by the updater.
+- **Releases must stay universal.** `build.sh` builds the host architecture only, unless
+  `UNIVERSAL=1` (set by `release.yml`), which requires both slices and fails the build otherwise.
+  The updater doesn't check architectures, so an arm64-only release would install itself on
+  Intel Macs and then fail to launch. Command Line Tools can't link the x86_64 slice for macOS 11
+  (their Swift compatibility libraries are arm64-only), so `UNIVERSAL=1` needs Xcode locally.
 
 ## Detecting install and sign-in (2026-10-21)
 

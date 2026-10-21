@@ -3,7 +3,7 @@
 # Claude Usage Stats
 
 Một ứng dụng nhỏ trên thanh menu macOS hiển thị mức sử dụng Claude Code của bạn
-ngay trong tầm mắt — cùng những con số như lệnh `claude /usage`, luôn hiển thị.
+— cùng những con số như lệnh `claude /usage`, luôn hiển thị.
 
 - **Dòng trên** — % mức sử dụng **phiên (session)** hiện tại
 - **Dòng dưới** — % mức sử dụng **tuần (tất cả mô hình)** hiện tại
@@ -69,7 +69,7 @@ và khi endpoint sử dụng bị giới hạn tần suất thì được coi l�
 
 Không cần truy cập Keychain. Ứng dụng không đụng đến thông tin đăng nhập của bạn.
 
-**Lần khởi chạy đầu tiên:** Ứng dụng hoạt động ngay mà không cần quyền bổ sung,
+**Lần khởi chạy đầu tiên:** Ứng dụng hoạt động mà không cần quyền bổ sung,
 miễn là `claude` đã được cài trên máy và bạn đã đăng nhập.
 
 **Không tìm thấy lệnh:** Nếu lệnh `claude` không khả dụng, ứng dụng hiển thị một
@@ -78,9 +78,13 @@ bảng cảnh báo gợi ý cài đặt nó.
 ## Dựng và cài đặt từ mã nguồn
 
 Muốn tự dựng? Sao chép (clone) kho mã và chạy trình cài đặt. Khi chạy từ một bản
-checkout cục bộ, `install.sh` biên dịch mã nguồn hiện tại của bạn thành một tệp
-nhị phân universal, cài ứng dụng vào `/Applications` và khởi chạy — không tải gì
-về, nên bạn chạy đúng mã đang có trong tay.
+checkout cục bộ, `install.sh` biên dịch mã nguồn hiện tại của bạn cho kiến trúc
+của máy Mac này (Apple silicon hoặc Intel), cài ứng dụng vào `/Applications` và
+khởi chạy — không tải gì về, nên ứng dụng chạy từ mã nguồn bạn đang có.
+
+Bản phát hành là tệp nhị phân universal. Lệnh `UNIVERSAL=1 ./build.sh` dựng bản
+universal trên máy bạn, nhưng cần Xcode: bộ công cụ dòng lệnh (Command Line Tools)
+không liên kết được kiến trúc còn lại.
 
 ```bash
 git clone https://github.com/openhoangnc/claude-usage-stats.git

@@ -95,6 +95,10 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :CUSReleaseBuild bool true" Info.plist
 
       - name: Build macOS Application
+        env:
+          # Both slices or a failed build: local builds are host-arch only, and an
+          # arm64-only release would install on Intel Macs and refuse to run.
+          UNIVERSAL: "1"
         run: |
           chmod +x make_icon.sh build.sh
           ./make_icon.sh

@@ -67,8 +67,11 @@ curl -fsSL https://raw.githubusercontent.com/openhoangnc/claude-usage-stats/main
 ## 从源码构建并安装
 
 想自己构建？克隆仓库并运行安装脚本。从本地检出运行时，`install.sh` 会把你当前的
-源码编译成通用（universal）二进制，安装到 `/Applications` 并启动——不下载任何
-东西，因此运行的正是你手上的代码。
+源码编译为本机架构（Apple 芯片或 Intel）的二进制，安装到 `/Applications` 并启动
+——不下载任何东西，因此运行的正是你手上的代码。
+
+发布版是通用（universal）二进制。本地也可以用 `UNIVERSAL=1 ./build.sh` 构建通用版，
+但需要 Xcode：仅有命令行工具无法链接另一种架构。
 
 ```bash
 git clone https://github.com/openhoangnc/claude-usage-stats.git

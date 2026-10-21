@@ -75,9 +75,12 @@ No Keychain access is required. The app doesn't touch your credentials.
 ## Build & install from source
 
 Prefer to build it yourself? Clone the repo and run the installer. From a local
-checkout, `install.sh` compiles your current sources into a universal binary,
-installs the app to `/Applications`, and launches it — nothing is downloaded, so
-you run exactly the code in front of you.
+checkout, `install.sh` compiles your current sources for your Mac's architecture
+(Apple silicon or Intel), installs the app to `/Applications`, and launches it —
+nothing is downloaded, so you run exactly the code in front of you.
+
+Release builds are universal. `UNIVERSAL=1 ./build.sh` makes one locally, but it
+needs Xcode: the command-line tools alone can't link the other architecture.
 
 ```bash
 git clone https://github.com/openhoangnc/claude-usage-stats.git
