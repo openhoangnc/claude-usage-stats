@@ -50,6 +50,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)   // no Dock icon / Cmd-Tab entry
+        if let old = Updater.replacedPID {
+            // Started by an update: the old copy quits once we've finished
+            // launching. Showing an icon before then would put two in the bar.
+            waitForExit(of: old, until: Date().addingTimeInterval(180)) { [weak self] in
+                self?.start()
+            }
+        } else {
+            start()
+        }
+    }
+
+    /// Call `then` once `pid` has exited, or at `deadline` if it hasn't.
+    private func waitForExit(of pid: pid_t, until deadline: Date, then: @escaping () -> Void) {
+        if kill(pid, 0) != 0 || Date() > deadline { return then() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.waitForExit(of: pid, until: deadline, then: then)
+        }
+    }
+
+    private func start() {
         if anotherInstanceIsAlreadyRunning() {
             // A copy is already in the menu bar (e.g. Launch-at-Login plus a
             // manual open). Hand off to it and quit so there's only one icon.
@@ -83,12 +103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// True if another copy of this app (same bundle id) is already running.
     /// When two instances race to launch, the tie is broken deterministically by
     /// launch date (then pid) so exactly one survivor is kept — this instance
-    /// quits only when a genuine elder exists.
+    /// quits only when a genuine elder exists. The copy an update replaces
+    /// doesn't count: it's on its way out, and may still be listed.
     private func anotherInstanceIsAlreadyRunning() -> Bool {
         let me = NSRunningApplication.current
         let others = NSRunningApplication
             .runningApplications(withBundleIdentifier: bundleId)
             .filter { $0.processIdentifier != me.processIdentifier && !$0.isTerminated }
+            .filter { $0.processIdentifier != Updater.replacedPID }
         guard !others.isEmpty else { return false }
 
         let myDate = me.launchDate ?? Date.distantFuture

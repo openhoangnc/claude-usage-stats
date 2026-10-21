@@ -55,9 +55,26 @@ and D-210.
 The app updates itself from GitHub Releases: daily it reads `releases/latest`, compares the tag
 with `CFBundleShortVersionString`, downloads the **`ClaudeUsageStats.zip`** asset, checks it
 against the asset's GitHub `digest` (sha256), unpacks it with `ditto`, verifies bundle id, version
-and `codesign --verify`, swaps the bundle with `FileManager.replaceItemAt`, and relaunches. It
-waits for any in-flight `claude` fetch to finish before quitting (same OAuth-race reason as the
-fetch single-flighting).
+and `codesign --verify`, swaps the bundle with `FileManager.replaceItemAt`, and hands over to the
+new bundle. It waits for any in-flight `claude` fetch to finish before quitting (same OAuth-race
+reason as the fetch single-flighting).
+
+**The handover (2026-10-21).** The old copy starts the swapped bundle as a second instance
+(`NSWorkspace.openApplication`, `createsNewApplicationInstance`, args `--replacing <old pid>`) and
+quits only once that copy reports `isFinishedLaunching`. The new copy holds its icon until the old
+pid exits, and its single-instance guard ignores that pid. Before this, the app quit first and a
+shell ran `open` afterwards. The first launch of a swapped bundle goes through
+CoreServicesUIAgent and a Gatekeeper scan, which took **30s** on a busy Mac, and for all that time
+the menu bar showed nothing ("it quit and didn't restart"). A copy that's already been launched
+once starts in ~1s, so testing with a binary that has already run hides the gap: test the
+handover with a freshly compiled build.
+
+- **Every release must keep honouring `--replacing`.** A version without it would see the old copy
+  through its single-instance guard and quit. The old copy then notices the new one stopped, keeps
+  running, and asks the user to reopen the app (`handOverFailed`). Nothing breaks, but the update
+  doesn't take until the next launch.
+- 1.0.18 and 1.0.19 still use the old quit-then-`open` relaunch, so updating *from* them can
+  still show the 30s gap once.
 
 The release pipeline is part of this contract:
 

@@ -8,7 +8,7 @@ import CryptoKit
 /// for each asset. An update is: fetch `releases/latest`, compare its tag with
 /// our `CFBundleShortVersionString`, download the zip, check its digest, unpack
 /// it next to the running bundle, sanity-check what came out, swap it into place
-/// and relaunch.
+/// and hand over to the new bundle (see `relaunch`).
 ///
 /// Only **release builds** check on their own. A local `./build.sh` stamps
 /// version 1.0.0 into the bundle, so an automatic check would quietly replace a
@@ -41,9 +41,21 @@ final class Updater {
 
     /// Called on the main thread whenever `pendingRelease` / `isBusy` change.
     var onChange: (() -> Void)?
-    /// Asked before relaunching; call the handler once it's safe to quit (no
-    /// `claude` mid-fetch). Without it the app relaunches immediately.
+    /// Asked before quitting for the new version; call the handler once it's
+    /// safe to quit (no `claude` mid-fetch). Without it the app quits at once.
     var whenSafeToQuit: ((@escaping () -> Void) -> Void)?
+
+    /// Passed, with our pid, to the copy an update starts; see `replacedPID`.
+    static let replacingFlag = "--replacing"
+
+    /// The pid of the old copy, when this one was started by an update. That
+    /// copy quits once this one has finished launching, so it must be waited
+    /// out rather than treated as another instance.
+    static let replacedPID: pid_t? = {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: replacingFlag), i + 1 < args.count else { return nil }
+        return pid_t(args[i + 1])
+    }()
 
     private var timer: Timer?
 
@@ -191,14 +203,14 @@ final class Updater {
         DispatchQueue.global(qos: .utility).async {
             let result = Result { try self.downloadAndSwap(release) }
             DispatchQueue.main.async {
-                self.setBusy(false)
                 switch result {
                 case .success:
                     NSLog("ClaudeUsageStats:updated to \(release.version), relaunching")
                     self.pendingRelease = nil
                     self.onChange?()
-                    self.relaunch()
+                    self.relaunch(release, userInitiated: userInitiated)   // stays busy until we quit
                 case .failure(let error):
+                    self.setBusy(false)
                     NSLog("ClaudeUsageStats:update to \(release.version) failed — \(error.localizedDescription)")
                     if userInitiated {
                         let choice = self.ask("Couldn't install the update", error.localizedDescription,
@@ -298,23 +310,62 @@ final class Updater {
         return task.terminationStatus
     }
 
-    /// Quit and reopen the (now replaced) bundle. The single-instance guard makes
-    /// a second copy quit while we're alive, so a detached shell waits for this
-    /// pid to exit before `open`ing the app again.
-    private func relaunch() {
-        let go = {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/sh")
-            task.arguments = ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$2\"",
-                              "sh", "\(ProcessInfo.processInfo.processIdentifier)", Bundle.main.bundlePath]
-            do {
-                try task.run()
-                NSApp.terminate(nil)
-            } catch {
-                NSLog("ClaudeUsageStats:relaunch failed — \(error); the update applies on next launch")
+    /// How long the new copy may take to finish launching before we give up on
+    /// handing over and keep running the old code.
+    private let handOverTimeout: TimeInterval = 180
+
+    /// Start the (now replaced) bundle as a second instance, and quit only once
+    /// it has finished launching; it waits for us to exit before it shows its
+    /// icon (`replacedPID`).
+    ///
+    /// Quitting first and reopening after left the menu bar empty for as long
+    /// as macOS took over the first launch of the new binary: the swapped
+    /// bundle goes through CoreServicesUIAgent and a Gatekeeper scan, which
+    /// took 30s on a busy Mac. It looked as if the app had quit for good.
+    private func relaunch(_ release: Release, userInitiated: Bool) {
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true   // never just activate us
+        config.activates = false
+        config.addsToRecentItems = false
+        config.arguments = [Updater.replacingFlag, String(ProcessInfo.processInfo.processIdentifier)]
+
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { app, error in
+            DispatchQueue.main.async {
+                guard let app = app else {
+                    self.handOverFailed(release, userInitiated: userInitiated,
+                                        reason: error?.localizedDescription ?? "it didn't start")
+                    return
+                }
+                let deadline = Date().addingTimeInterval(self.handOverTimeout)
+                func poll() {
+                    if app.isTerminated {
+                        return self.handOverFailed(release, userInitiated: userInitiated, reason: "it quit while starting")
+                    }
+                    if !app.isFinishedLaunching {
+                        if Date() > deadline {
+                            return self.handOverFailed(release, userInitiated: userInitiated, reason: "it took too long to start")
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: poll)
+                        return
+                    }
+                    NSLog("ClaudeUsageStats:\(release.version) is up (pid \(app.processIdentifier)), quitting")
+                    let quit = { NSApp.terminate(nil) }
+                    if let wait = self.whenSafeToQuit { wait(quit) } else { quit() }
+                }
+                poll()
             }
         }
-        if let wait = whenSafeToQuit { wait(go) } else { go() }
+    }
+
+    /// The new bundle is on disk but didn't take over: keep running the old
+    /// code, which still works, and let the next launch pick the update up.
+    private func handOverFailed(_ release: Release, userInitiated: Bool, reason: String) {
+        NSLog("ClaudeUsageStats:relaunch into \(release.version) failed — \(reason); the update applies on next launch")
+        setBusy(false)
+        if userInitiated {
+            alert("Claude Usage Stats \(release.version) is installed",
+                  "It couldn't restart on its own (\(reason)). Quit Claude Usage Stats and open it again to finish.")
+        }
     }
 
     // MARK: Helpers
