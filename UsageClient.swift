@@ -70,12 +70,15 @@ struct UsageSnapshot {
 
 enum UsageError: Error {
     case claudeCliNotInstalled
-    /// Also covers a `/usage` we simply couldn't read: when neither the
-    /// headless nor the interactive capture yields a single limit row, the
+    /// `claude auth status` says the CLI holds no sign-in. Also covers a
+    /// `/usage` we simply couldn't read from a CLI too old to say: when neither
+    /// the headless nor the interactive capture yields a single limit row, the
     /// overwhelmingly common cause is a CLI sitting on a login/onboarding
     /// screen whose wording `isAuthError` doesn't happen to match, so the app
     /// asks for a sign-in rather than reporting an unactionable parse failure.
     case noCredentials
+    /// Usage couldn't be read although `claude auth status` says the CLI is
+    /// signed in — most likely a token the server no longer accepts.
     case sessionExpired
     case network(String)
 
@@ -179,6 +182,31 @@ final class UsageClient {
         }
     }
 
+    /// What the machine offers a fetch, as far as can be seen without one.
+    enum Setup {
+        case notInstalled
+        /// `signedIn` is nil when the CLI can't say (older than 2.1.41).
+        case installed(signedIn: Bool?)
+    }
+
+    /// Look for `claude` and ask whether it's signed in, without fetching
+    /// usage: a PATH lookup and `claude auth status`, both well under a second.
+    /// Meant for while a fetch has failed for want of either, so an install or
+    /// a sign-in is noticed within a minute rather than after the long back-off.
+    /// `completion` is called on the main thread.
+    func checkSetup(completion: @escaping (Setup) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let setup: Setup
+            if let resolution = PathResolver.resolve() {
+                setup = .installed(signedIn: self.signInStatus(claude: resolution.claude,
+                                                               path: resolution.path))
+            } else {
+                setup = .notInstalled
+            }
+            DispatchQueue.main.async { completion(setup) }
+        }
+    }
+
     /// How long the headless probe may run before we give up on it this round.
     private let printTimeout: TimeInterval = 25
     /// How long headless may run when it is the last resort (the TUI failed).
@@ -206,6 +234,12 @@ final class UsageClient {
         var printSnapshot: UsageSnapshot?
         var triedPrint = false
 
+        /// The sign-in error for usage we couldn't read. Asked only once a
+        /// source has failed, since `auth status` can refresh the token.
+        func signInError() -> UsageError {
+            signInStatus(claude: claude, path: path) == true ? .sessionExpired : .noCredentials
+        }
+
         /// Headless `claude -p /usage`. Doesn't touch the TUI's rate-limited
         /// view. Returns a final result, or nil to keep trying other sources.
         func tryPrint(timeout: TimeInterval) -> Result<UsageSnapshot, UsageError>? {
@@ -227,7 +261,7 @@ final class UsageClient {
             // Rows parsed means we're signed in, whatever the prose around
             // them happens to contain (skill names, tips…).
             if printSnapshot == nil && Self.isAuthError(printOut) {
-                return .failure(.noCredentials)
+                return .failure(signInError())
             }
             return nil
         }
@@ -277,17 +311,44 @@ final class UsageClient {
             // wording changes often enough that `isAuthError` can't be trusted
             // to recognise it. `claude /login` is then the one actionable fix
             // we can offer — a bare "couldn't read usage" leaves the user with
-            // nothing to do.
-            return .failure(.noCredentials)
+            // nothing to do. `auth status` then tells signed out from expired.
+            return .failure(signInError())
         }
     }
 
     /// Run `claude -p /usage` and return its combined stdout+stderr. Empty on a
     /// launch failure. Bounded by `timeout` so a hung CLI can't block the poll.
     private func capturePrintUsage(claude: String, path: String, timeout: TimeInterval) -> String {
+        let (out, err) = runCLI(claude: claude, path: path, args: ["-p", "/usage"], timeout: timeout)
+        return String(decoding: out, as: UTF8.self) + "\n" + String(decoding: err, as: UTF8.self)
+    }
+
+    /// `claude auth status` reads stored credentials and answers in well under
+    /// a second; this only bounds a CLI that hangs.
+    private let authStatusTimeout: TimeInterval = 10
+
+    /// Whether the CLI holds a sign-in, from `claude auth status --json`
+    /// (`loggedIn`). nil when it can't say: a CLI older than 2.1.41 has no
+    /// `auth` command and rejects `--json` as an unknown option, so it never
+    /// takes the words for a prompt.
+    ///
+    /// The command can refresh the OAuth token (CLI 2.1.289 and 2.1.301 both
+    /// fixed sign-outs it caused), so it is never run on a healthy poll — only
+    /// once a fetch has failed, or while there is no token to refresh.
+    private func signInStatus(claude: String, path: String) -> Bool? {
+        let (out, _) = runCLI(claude: claude, path: path, args: ["auth", "status", "--json"],
+                              timeout: authStatusTimeout)
+        let json = (try? JSONSerialization.jsonObject(with: out)) as? [String: Any]
+        return json?["loggedIn"] as? Bool
+    }
+
+    /// Run `claude` with `args`, returning its stdout and stderr. Empty on a
+    /// launch failure. Bounded by `timeout` so a hung CLI can't block the poll.
+    private func runCLI(claude: String, path: String, args: [String],
+                        timeout: TimeInterval) -> (out: Data, err: Data) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: claude)
-        task.arguments = ["-p", "/usage"]
+        task.arguments = args
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = path
         for (k, v) in extraEnv where k != "TERM" { env[k] = v }
@@ -298,7 +359,7 @@ final class UsageClient {
         task.standardError = errPipe
         task.standardInput = FileHandle.nullDevice
 
-        do { try task.run() } catch { return "" }
+        do { try task.run() } catch { return (Data(), Data()) }
 
         let killer = DispatchWorkItem { if task.isRunning { task.terminate() } }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: killer)
@@ -307,7 +368,7 @@ final class UsageClient {
         task.waitUntilExit()
         killer.cancel()
 
-        return String(decoding: outData, as: UTF8.self) + "\n" + String(decoding: errData, as: UTF8.self)
+        return (outData, errData)
     }
 
     /// Outcome of one interactive `/usage` scrape.

@@ -8,9 +8,10 @@ import Foundation
 /// `.zshrc`, so it misses those entries. We use an interactive login shell
 /// (`zsh -ilc`) instead, which sources the full config.
 ///
-/// The result is cached only once `claude` is actually located, so a failed
-/// lookup does not stick — "Refresh" recovers after the CLI is installed or the
-/// environment is fixed, without restarting the app.
+/// The result is cached only once `claude` is actually located, and then only
+/// for `cacheLifetime`, so neither answer sticks: "Refresh" recovers after the
+/// CLI is installed or the environment is fixed, and a CLI reinstalled
+/// somewhere else is found again, all without restarting the app.
 enum PathResolver {
 
     /// Where `claude` is and the PATH to run it under (so its own child
@@ -21,22 +22,29 @@ enum PathResolver {
     }
 
     private static let lock = NSLock()
-    private static var cached: Resolution?
+    private static var cached: (resolution: Resolution, at: Date)?
 
-    /// Cached resolution if `claude` was found before and still exists;
+    /// How long a located `claude` is trusted before the shell is asked again.
+    /// A still-existing binary isn't proof it's the one the terminal runs: a
+    /// switch from npm to the native installer, a new nvm version or a PATH
+    /// edit in `.zshrc` all leave the old path in place.
+    private static let cacheLifetime: TimeInterval = 10 * 60
+
+    /// Cached resolution if `claude` was found recently and still exists;
     /// otherwise a fresh attempt. `nil` when `claude` can't be located.
     static func resolve() -> Resolution? {
         lock.lock(); defer { lock.unlock() }
 
-        if let c = cached, FileManager.default.isExecutableFile(atPath: c.claude) {
-            return c
+        if let c = cached, Date().timeIntervalSince(c.at) < cacheLifetime,
+           FileManager.default.isExecutableFile(atPath: c.resolution.claude) {
+            return c.resolution
         }
-        cached = nil   // stale (binary moved/removed) — re-resolve below
+        cached = nil   // expired, or the binary moved/was removed — re-resolve below
 
         let path = interactiveLoginPath()
         if let claude = locate("claude", onPath: path) {
             let result = Resolution(claude: claude, path: path)
-            cached = result
+            cached = (result, Date())
             return result
         }
         return nil

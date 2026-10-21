@@ -68,3 +68,23 @@ The release pipeline is part of this contract:
   themselves with the release. "Check for Updates…" still works on them and asks first.
 - A release whose zip doesn't contain a `ClaudeUsageStats.app` at the top level, or whose
   Info.plist version differs from the tag, is refused by the updater.
+
+## Detecting install and sign-in (2026-10-21)
+
+Neither "is `claude` installed" nor "is it signed in" is held for long:
+
+- `PathResolver` caches a located `claude` for 10 minutes, then asks the interactive shell again,
+  so a reinstall elsewhere (npm → native installer, new nvm version) is picked up. A failed lookup
+  is never cached.
+- While the last fetch failed with `.claudeCliNotInstalled` or `.noCredentials`, `AppDelegate`
+  runs `UsageClient.checkSetup` every 60s (PATH lookup + `claude auth status --json`) and fetches
+  at once when the cause is gone, instead of waiting out the 15–30 min failure back-off.
+- When a fetch reads no usage bars, `auth status` decides the error: `loggedIn: false` (or a CLI
+  too old to answer) → `.noCredentials`; `loggedIn: true` → `.sessionExpired`. That one isn't
+  watched, because a fresh `/login` doesn't change what `auth status` says.
+
+⚠️ **Never call `claude auth status` on a healthy poll.** It can refresh the OAuth token (CLI
+2.1.289 and 2.1.301 both fixed sign-outs it caused), which is the race the fetch single-flighting
+exists to avoid. It runs only after a fetch has failed, or while there's no token to refresh.
+CLIs older than 2.1.41 have no `auth` command; they reject `--json` as an unknown option rather
+than taking `auth status` as a prompt, and the check reads that as "can't say".

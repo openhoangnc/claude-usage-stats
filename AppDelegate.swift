@@ -20,6 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let partialRefreshInterval: TimeInterval = 60   // caught /usage mid-render: settles on its own
     private var currentRefreshInterval: TimeInterval = 300
 
+    /// While a fetch has failed because `claude` is missing or signed out, a
+    /// cheap install/sign-in check runs this often, so the error clears within
+    /// a minute of the fix instead of when the long back-off ends.
+    private let setupCheckInterval: TimeInterval = 60
+    private var setupTimer: Timer?
+
     private var lastRefreshAt: Date?
     private let menuRefreshThrottle: TimeInterval = 30   // skip the on-open auto-refresh if we just fetched
 
@@ -63,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater.whenSafeToQuit = { [weak self] quit in
             guard let self = self else { return quit() }
             self.timer?.invalidate()
+            self.setupTimer?.invalidate()
             let deadline = Date().addingTimeInterval(120)
             func poll() {
                 if !self.client.isBusy || Date() > deadline { return quit() }
@@ -180,14 +187,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("ClaudeUsageStats:fetch failed — \(error.message)")
                 self.backOffAfterFailure(error)
             }
+            self.updateSetupWatch()
             self.applyState()
+        }
+    }
+
+    /// Run the install/sign-in check only while the error is one it can see
+    /// the end of. `.sessionExpired` isn't watched: the CLI already says it's
+    /// signed in, so a fresh `claude /login` doesn't change its answer.
+    private func updateSetupWatch() {
+        let watch: Bool
+        switch lastError {
+        case .claudeCliNotInstalled?, .noCredentials?: watch = true
+        default: watch = false
+        }
+        if !watch {
+            setupTimer?.invalidate()
+            setupTimer = nil
+        } else if setupTimer == nil {
+            setupTimer = Timer.scheduledTimer(withTimeInterval: setupCheckInterval, repeats: true) { [weak self] _ in
+                self?.checkSetup()
+            }
+            setupTimer?.tolerance = setupCheckInterval * 0.2
+        }
+    }
+
+    /// Fetch at once when the check shows the cause of the current error is gone.
+    private func checkSetup() {
+        guard let error = lastError, !client.isBusy else { return }
+        client.checkSetup { [weak self] setup in
+            // A fetch may have cleared the error while the check ran.
+            guard let self = self, self.lastError != nil else { return }
+            switch (error, setup) {
+            case (.claudeCliNotInstalled, .installed),
+                 (.noCredentials, .installed(signedIn: true)):
+                NSLog("ClaudeUsageStats:setup check — claude is installed and signed in now, refreshing")
+                self.refresh()
+            default:
+                break
+            }
         }
     }
 
     /// Widen the polling interval after a failed fetch so a broken state isn't
     /// hammered. A signed-out session only recovers when the user re-logs in, so
-    /// we wait a long time (opening the menu or "Refresh Now" still retries at
-    /// once); transient failures use plain exponential backoff up to a cap.
+    /// we wait a long time (the setup check notices a sign-in within a minute,
+    /// and opening the menu or "Refresh Now" still retries at once); transient
+    /// failures use plain exponential backoff up to a cap.
     private func backOffAfterFailure(_ error: UsageError) {
         let next: TimeInterval
         switch error {
