@@ -7,6 +7,8 @@ Một ứng dụng nhỏ trên thanh menu macOS hiển thị mức sử dụng C
 
 - **Dòng trên** — % mức sử dụng **phiên (session)** hiện tại
 - **Dòng dưới** — % mức sử dụng **tuần (tất cả mô hình)** hiện tại
+- **Chỉ một con số** — gói chỉ có một trong hai khung thời gian thì thanh menu hiện riêng
+  số đó, chữ lớn hơn (ví dụ gói Ultra không có giới hạn phiên 5 giờ).
 - **Nhấp chuột** — một bảng chi tiết với cả ba khung thời gian (phiên, tuần tất cả
   mô hình, và giới hạn tuần của mô hình bạn đang dùng), mỗi khung có một thanh
   tiến trình và một dòng đặt lại (reset) hiển thị giờ địa phương cùng thời gian

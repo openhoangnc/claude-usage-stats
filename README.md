@@ -7,6 +7,8 @@ same numbers as the `claude /usage` command, always visible.
 
 - **Top line** — current **session** usage %
 - **Bottom line** — current **week (all models)** usage %
+- **One number** — a plan with only one of the two windows shows that number
+  alone, larger (Ultra, for example, has no 5-hour session limit).
 - **Click** — a detail panel with all three windows (session, week all-models,
   and your active model's weekly limit), each with a progress bar and a reset
   line showing the local time and how long until reset.

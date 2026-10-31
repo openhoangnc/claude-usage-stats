@@ -1,8 +1,9 @@
 import AppKit
 
 /// Two-line menu-bar view: session % on top, weekly % below (all models, or a
-/// model-scoped week when the plan has no all-models cap). An account with a
-/// session limit only gets a single, larger session % centred vertically.
+/// model-scoped week when the plan has no all-models cap). An account with
+/// only one of the two — a session limit only, or no session limit (Ultra) —
+/// gets that single number, larger and centred vertically.
 /// The percentages are auto-colored by usage range (see `UsageColors`).
 final class StatusBarView: NSView {
 
@@ -35,13 +36,7 @@ final class StatusBarView: NSView {
     override func rightMouseDown(with event: NSEvent) { onRightClick?() }
 
     private var cachedAppearance: NSAppearance?
-    private var cachedSessionString: NSAttributedString?
-    private var cachedWeekString: NSAttributedString?
-
-    /// Session known, no weekly window at all: the account has a session limit
-    /// only. Before the first fetch both are nil, so the two-line "··"
-    /// placeholders still show while loading.
-    private var isSingleLine: Bool { sessionPct != nil && weekPct == nil }
+    private var cachedLines: [NSAttributedString]?
 
     // MARK: Data
 
@@ -49,8 +44,7 @@ final class StatusBarView: NSView {
         sessionPct = session?.percent
         weekPct = weekly?.percent
         isStale = stale
-        cachedSessionString = nil
-        cachedWeekString = nil
+        cachedLines = nil
         recomputeWidth()
         needsDisplay = true
     }
@@ -70,28 +64,26 @@ final class StatusBarView: NSView {
         ])
     }
 
-    private func getSessionString() -> NSAttributedString {
-        updateCachedStringsIfNeeded()
-        return cachedSessionString!
-    }
-
-    private func getWeekString() -> NSAttributedString {
-        updateCachedStringsIfNeeded()
-        return cachedWeekString!
-    }
-
-    private func updateCachedStringsIfNeeded() {
-        if cachedSessionString == nil || cachedWeekString == nil || cachedAppearance != effectiveAppearance {
-            cachedAppearance = effectiveAppearance
-            cachedSessionString = createLine(sessionPct, font: isSingleLine ? Self.singleFont : Self.valueFont)
-            cachedWeekString = createLine(weekPct)
+    /// The lines to draw, top to bottom. When only one window is known the
+    /// account has only that one, and it gets the bar to itself. Before the
+    /// first fetch both are nil, so the two-line "··" placeholders still show
+    /// while loading.
+    private func lines() -> [NSAttributedString] {
+        if let cached = cachedLines, cachedAppearance == effectiveAppearance { return cached }
+        cachedAppearance = effectiveAppearance
+        let made: [NSAttributedString]
+        switch (sessionPct, weekPct) {
+        case (let only?, nil), (nil, let only?):
+            made = [createLine(only, font: Self.singleFont)]
+        default:
+            made = [createLine(sessionPct), createLine(weekPct)]
         }
+        cachedLines = made
+        return made
     }
 
     private func recomputeWidth() {
-        let textW = isSingleLine
-            ? getSessionString().size().width
-            : max(getSessionString().size().width, getWeekString().size().width)
+        let textW = lines().map { $0.size().width }.max() ?? 0
         var newWidth = max(22, ceil(textW))
         if isStale { newWidth += Self.warnColWidth }
         if abs(newWidth - preferredWidth) > 0.5 {
@@ -105,15 +97,14 @@ final class StatusBarView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let textX: CGFloat = isStale ? Self.warnColWidth : 0
         let textW = bounds.width - textX
-        if isSingleLine {
-            let line = getSessionString()
-            let h = ceil(line.size().height)
-            line.draw(in: NSRect(x: textX, y: (bounds.height - h) / 2, width: textW, height: h))
-            if isStale { drawWarningMark() }
-            return
+        let lines = self.lines()
+        if lines.count == 1 {
+            let h = ceil(lines[0].size().height)
+            lines[0].draw(in: NSRect(x: textX, y: (bounds.height - h) / 2, width: textW, height: h))
+        } else {
+            lines[0].draw(in: NSRect(x: textX, y: 11, width: textW, height: 11))
+            lines[1].draw(in: NSRect(x: textX, y: 1,  width: textW, height: 11))
         }
-        getSessionString().draw(in: NSRect(x: textX, y: 11, width: textW, height: 11))
-        getWeekString().draw(in: NSRect(x: textX, y: 1,  width: textW, height: 11))
 
         if isStale { drawWarningMark() }
     }

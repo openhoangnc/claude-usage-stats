@@ -41,6 +41,7 @@ struct UsageSnapshot {
     let limits: [UsageLimit]        // in display order (session, weekly_all, weekly_scoped)
     let fetchedAt: Date
 
+    /// `nil` on plans with no 5-hour limit (Ultra): `/usage` leaves the row out.
     var session: UsageLimit?   { limits.first { $0.kind == "session" } }
     var weeklyAll: UsageLimit? { limits.first { $0.kind == "weekly_all" } }
 
@@ -65,7 +66,12 @@ struct UsageSnapshot {
     /// the slow interactive scrape to its timeout. A session-only account still
     /// never completes; `AppDelegate` accepts its partials once they outlast
     /// the render-race window.
-    var isComplete: Bool { session != nil && weekly != nil }
+    ///
+    /// The session row isn't required. Plans with no 5-hour limit (Ultra) have
+    /// none — the CLI skips a window the account doesn't have — and since the
+    /// session row never paints after the weekly ones, a weekly row without it
+    /// is the whole panel, not a half-drawn one.
+    var isComplete: Bool { weekly != nil }
 }
 
 enum UsageError: Error {

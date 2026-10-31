@@ -286,10 +286,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelView.render(snapshot: lastSnapshot, error: lastError?.message)
 
         if let snapshot = lastSnapshot {
-            let s = snapshot.session.map { "\($0.percent)%" } ?? "–"
-            var tip = "Claude Usage Stats — Session \(s)"
-            if let w = snapshot.weekly { tip += " · \(w.title) \(w.percent)%" }
-            statusItem.button?.toolTip = tip
+            // Name only the windows the account has: Ultra has no session limit.
+            var parts: [String] = []
+            if let s = snapshot.session { parts.append("Session \(s.percent)%") }
+            if let w = snapshot.weekly { parts.append("\(w.title) \(w.percent)%") }
+            statusItem.button?.toolTip = "Claude Usage Stats — " + parts.joined(separator: " · ")
         } else {
             statusItem.button?.toolTip = lastError?.message ?? "Claude Usage Stats"
         }

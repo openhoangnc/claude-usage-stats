@@ -20,8 +20,8 @@ if CommandLine.arguments.contains("--selftest") {
     UsageClient().fetch { result in
         switch result {
         case .success(let s):
-            let sv = s.session.map { "\($0.percent)%" } ?? "··"
-            let wv = s.weekly.map { "\($0.percent)%" } ?? "··"
+            let sv = s.session.map { "\($0.percent)%" } ?? "none"
+            let wv = s.weekly.map { "\($0.percent)%" } ?? "none"
             print("MENUBAR   S \(sv)  /  W \(wv)\n")
             print("PANEL (detail):")
             for l in s.limits {
